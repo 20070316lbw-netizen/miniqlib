@@ -21,3 +21,8 @@ Thumbs.db
 *.sqlite
 .env
 secrets.*
+
+
+# 其他
+vectorbit
+qlib
