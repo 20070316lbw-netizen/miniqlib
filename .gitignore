@@ -24,5 +24,6 @@ secrets.*
 
 
 # 其他
-vectorbit
-qlib
+vectorbit/
+qlib/
+Zipline-reloaded/
