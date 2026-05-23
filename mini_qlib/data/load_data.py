@@ -3,12 +3,13 @@ import pandas as pd
 from utils.config import get_db, DEFAULT_DB
 
 
-def create_prices_table(con: duckdb.DuckDBPyConnection) -> None:
-    """建 prices 表（如已存在则先删除）"""
-    # TODO
-    con.execute("DROP TABLE IF EXISTS prices")
+def init_prices_table(con: duckdb.DuckDBPyConnection) -> None:
+    """
+    Initialize prices table if it does not exist (Safe, NO drop table).
+    初始化 prices 表（如果不存在），不执行删除操作，确保数据安全。
+    """
     con.execute("""
-        CREATE TABLE prices (
+        CREATE TABLE IF NOT EXISTS prices (
             date     DATE,
             ticker   VARCHAR,
             open     DOUBLE,
@@ -22,29 +23,50 @@ def create_prices_table(con: duckdb.DuckDBPyConnection) -> None:
 
 
 def insert_prices(con: duckdb.DuckDBPyConnection, df: pd.DataFrame) -> int:
-    """将 DataFrame 写入 prices 表，返回写入行数"""
-    con.execute("INSERT INTO prices SELECT * FROM df")
-    count = con.execute("SELECT COUNT(*) FROM prices").fetchone()[0]
-    return count
+    """
+    Insert prices into prices table, replacing existing rows on primary key conflict.
+    将 DataFrame 写入 prices 表（增量写入，主键冲突时进行替换/更新），并返回写入的行数。
+    """
+    if df.empty:
+        return 0
+
+    # Align column order to match database schema
+    # 对齐列顺序以匹配数据库表结构
+    df_aligned = df[["date", "ticker", "open", "high", "low", "close", "volume"]]
+    
+    con.execute("INSERT OR REPLACE INTO prices SELECT * FROM df_aligned")
+    return len(df_aligned)
 
 
-def load_prices(df: pd.DataFrame) -> int:
+def get_latest_price_date() -> str | None:
     """
-    一步完成建表 + 写入：传入 DataFrame，写进数据库，返回写入行数
-    每次调用会清空重建 prices 表
+    Query the database to get the latest available price date.
+    从数据库查询已有的最新价格日期，若为空或表不存在返回 None。
     """
-    with duckdb.connect(str(DEFAULT_DB)) as con:
-        create_prices_table(con)
-        return insert_prices(con, df)
+    with get_db() as con:
+        try:
+            # First ensure table exists
+            init_prices_table(con)
+            res = con.execute("SELECT MAX(date) FROM prices").fetchone()
+            if res and res[0]:
+                return res[0].strftime("%Y-%m-%d")
+        except Exception as e:
+            print(f"查询最新日期失败: {e}")
+        return None
 
 
 def read_prices() -> pd.DataFrame:
-    """从数据库读取全部 prices 数据"""
+    """
+    Read all price data from database.
+    从数据库读取全部价格数据。
+    """
     with get_db() as con:
+        init_prices_table(con)
         return con.execute("SELECT * FROM prices ORDER BY ticker, date").df()
 
 
 if __name__ == "__main__":
     df = read_prices()
-    print(f"数据库中共 {len(df)} 行")
-    print(df.head())
+    print(f"数据库中共 {len(df)} 行数据")
+    if not df.empty:
+        print(df.head())
