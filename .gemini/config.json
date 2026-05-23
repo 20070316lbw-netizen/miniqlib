@@ -1,6 +1,7 @@
 {
   "preferredLanguage": "zh-CN",
   "instructions": [
-    "Always communicate in Chinese (默认使用中文交流)。"
+    "Always communicate in Chinese (默认使用中文交流)。",
+    "无论在开发中遇到了技术问题、重构设计或实验记录，都必须在 EXP_and_LOG/<YYYY-MM-DD>/ 下建立 Markdown 文件予以规范记录。"
   ]
 }

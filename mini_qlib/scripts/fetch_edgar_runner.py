@@ -47,7 +47,7 @@ if CONFIG_PATH.exists():
     except Exception as e:
         print(f"警告：读取私有配置文件失败，将使用默认邮箱。错误：{e}")
 
-DB_PATH    = "edgar.duckdb"
+DB_PATH    = str(PROJECT_ROOT / "mini_qlib" / "database" / "edgar.duckdb")
 HEADERS    = {"User-Agent": edgar_email}  # ← SEC EDGAR User-Agent / 用户标识
 RATE_LIMIT = 0.12  # Rate limit to comply with SEC (10 reqs/sec) / 限速以符合 SEC 要求（10次/秒）
 
