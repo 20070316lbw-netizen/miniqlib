@@ -21,6 +21,7 @@ Thumbs.db
 *.sqlite
 .env
 secrets.*
+config_private.yaml
 
 
 # 其他

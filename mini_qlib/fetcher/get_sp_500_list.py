@@ -1,28 +1,18 @@
-"""
-拉取标普500成分股列表
+# ==============================================================================
+# ABSOLUTE FILE PATH: C:\Users\liu\Desktop\miniqlib\mini_qlib\fetcher\get_sp_500_list.py
+# DESCRIPTION: Module to fetch and cache the S&P 500 company list from Wikipedia.
+# 描述: 从维基百科获取并缓存标普500成分股列表的模块。
+# WARNING: This file is critical for standard ticker alignment. Do NOT modify carelessly.
+# 警告: 本文件对于标准的股票代码对齐至关重要。切勿随意修改。
+# ==============================================================================
 
-策略（缓存优先，解决两个问题）：
-  问题1: 维基百科 SSL 偶发中断，每次实时抓不可靠
-  问题2: 成分股每季度变动，每次实时抓会导致回测无法复现
-          + 用今天的名单回测过去 = 幸存者偏差（已知妥协，先跑通）
-
-三层逻辑:
-  1) 本地缓存存在 -> 直接读，不碰网络（常态路径，快/稳/可复现）
-  2) 缓存不存在 -> 抓维基百科（带重试），成功后立刻写缓存
-  3) 抓取也失败 -> 不崩溃，打印手动补救指引
-
-⚠️ 幸存者偏差说明：这份名单是"抓取当天"的 S&P 500 成分股。
-   用它回测历史，相当于假设这些公司过去就一直在指数里，
-   且忽略了期间被剔除/退市的公司。作为学习项目第一版可接受，
-   将来做严肃回测时需换成"历史成分股"数据。
-"""
 import time
 from io import StringIO
 from pathlib import Path
-
 import pandas as pd
 import requests
 
+# Cache file location: under database/ directory
 # 缓存文件位置：database/ 目录下
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CACHE_PATH = PROJECT_ROOT / "database" / "sp500_tickers.csv"
@@ -31,7 +21,10 @@ WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 
 
 def _fetch_from_wikipedia(max_retries: int = 3) -> pd.DataFrame:
-    """从维基百科抓成分股，带重试。全部失败则抛异常。"""
+    """
+    Fetch S&P 500 tickers from Wikipedia with retry mechanism.
+    从维基百科抓取标普500成分股名单，带重试机制。
+    """
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                       "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -42,7 +35,6 @@ def _fetch_from_wikipedia(max_retries: int = 3) -> pd.DataFrame:
     for attempt in range(1, max_retries + 1):
         try:
             print(f"  正在抓取维基百科成分股名单（第 {attempt}/{max_retries} 次）...")
-            # timeout=(连接超时, 读取超时)，给慢/不稳的网络更多余地
             response = requests.get(WIKI_URL, headers=headers, timeout=(10, 30))
             response.raise_for_status()
 
@@ -57,7 +49,8 @@ def _fetch_from_wikipedia(max_retries: int = 3) -> pd.DataFrame:
             })
             sp500 = sp500[['symbol', 'security', 'sector', 'sub_industry']]
 
-            # yfinance 不认 BRK.B 这种点号，要改成 BRK-B
+            # Convert BRK.B to BRK-B format for yfinance compatibility
+            # 将 BRK.B 格式转换为 BRK-B 格式以适配 yfinance
             sp500['symbol'] = sp500['symbol'].str.replace('.', '-', regex=False)
 
             print(f"  ✅ 抓取成功，共 {len(sp500)} 只")
@@ -67,7 +60,7 @@ def _fetch_from_wikipedia(max_retries: int = 3) -> pd.DataFrame:
             last_err = e
             print(f"  ⚠️ 第 {attempt} 次失败: {type(e).__name__}")
             if attempt < max_retries:
-                wait = attempt * 3   # 3s, 6s, ... 递增退避
+                wait = attempt * 3   # Incremental backoff / 递增退避
                 print(f"     {wait} 秒后重试...")
                 time.sleep(wait)
 
@@ -76,32 +69,36 @@ def _fetch_from_wikipedia(max_retries: int = 3) -> pd.DataFrame:
 
 def get_sp500_tickers(force_refresh: bool = False) -> pd.DataFrame:
     """
-    返回 S&P 500 成分股 DataFrame: symbol, security, sector, sub_industry
+    Return S&P 500 tickers DataFrame: symbol, security, sector, sub_industry
+    返回标普500成分股 DataFrame 列表。
 
-    参数:
-        force_refresh: True 时忽略缓存，强制重新抓取并覆盖缓存
-                       （想更新名单时用，平时不要开）
-
-    逻辑: 缓存优先 -> 抓取 -> 兜底指引
+    Parameters
+    ----------
+    参数
+    ----------
+    force_refresh: bool
+        If True, ignore cache and force fetch from Wikipedia.
+        若为 True，忽略缓存强制重新抓取覆盖。
     """
-    # ---- 第一层：缓存优先 ----
+    # ---- 1st Layer: Cache Priority / 第一层：缓存优先 ----
     if CACHE_PATH.exists() and not force_refresh:
-        df = pd.read_csv(CACHE_PATH)
+        df = pd.read_csv(CACHE_PATH, encoding="utf-8")
         print(f"📂 使用本地缓存名单: {CACHE_PATH}")
         print(f"   共 {len(df)} 只（如需更新: get_sp500_tickers(force_refresh=True)）")
         return df
 
-    # ---- 第二层：缓存没有（或强制刷新），去抓 ----
+    # ---- 2nd Layer: Wikipedia Scrape / 第二层：缓存没有或强制刷新，去抓 ----
     try:
         df = _fetch_from_wikipedia()
-        # 抓成功立刻写缓存，下次就走第一层
+        # Save cache immediately upon successful fetch
+        # 抓取成功后立即写入缓存文件，确保下次运行秒级加载
         CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(CACHE_PATH, index=False)
+        df.to_csv(CACHE_PATH, index=False, encoding="utf-8")
         print(f"💾 已写入缓存: {CACHE_PATH}")
         print("   以后默认读这份，不再依赖维基百科")
         return df
 
-    # ---- 第三层：抓取也失败，给手动补救指引，不崩溃 ----
+    # ---- 3rd Layer: Scrape Failure Rescue / 第三层：抓取失败给出补救提示 ----
     except Exception as e:
         print("\n" + "=" * 60)
         print("❌ 缓存不存在，且维基百科抓取失败。")
@@ -118,7 +115,6 @@ def get_sp500_tickers(force_refresh: bool = False) -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    # 直接跑本文件 = 测试 / 首次生成缓存
     df = get_sp500_tickers()
     print(f"\n成功拿到 {len(df)} 只股票")
     print("\n前 10 只:")

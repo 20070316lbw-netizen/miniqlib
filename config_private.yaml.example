@@ -1,0 +1,10 @@
+# Example private configurations and API keys.
+# 示例私人配置和 API 密钥模板。请复制此文件并重命名为 config_private.yaml。
+
+# SEC EDGAR User-Agent email / SEC EDGAR 邮箱用户标识
+edgar_email: "your_email@example.com"
+
+# Future API keys / 未来要接入的 API 密钥
+api_keys:
+  openai: "your-openai-api-key-here"
+  anthropic: "your-anthropic-api-key-here"
