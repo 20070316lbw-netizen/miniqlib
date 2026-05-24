@@ -1,5 +1,23 @@
 """
-MiniQlib Expression AST Core Foundation
+================================================================================
+                    MiniExpression AST Core Foundation
+================================================================================
+
+                           MiniExpression (基类/地基)
+                                  │
+         ┌────────────────────────┴────────────────────────┐
+         ▼                                                 ▼
+   Feature (原子量价特征)                          [ Operator Overloading ]
+    (e.g., "$close" -> "$")                       (重载 __add__, __sub__, 等)
+         │                                                 │
+         ▼                                                 ▼
+   PFeature (时点财务特征)                         (动态编译并实例化位于 ops.py 的算子)
+    (e.g., "$$revenue" -> "$$")                     (Sub, Add, Mean, Ref 等)
+                                                           │
+                                                           ▼
+                                                递归生成全局唯一公式串与缓存键
+                                                str(expr) -> "Sub(Mean($close,20),1)"
+
 本文件包含 mini_qlib 算子引擎的底层 AST 计算树基类与原子特征类。
 作为整个系统的地基，它与具体算子分离，以彻底规避循环导入风险。
 """
@@ -44,7 +62,8 @@ class MiniExpression:
         pd.Series
             计算完成的单因子序列，其 Index 必须与输入的 df 保持完全一致。
         """
-        pass
+        # TODO: 在后续阶段实现具体的数据加载和缓存路由
+        return self._load_internal(df)
 
     def _load_internal(self, df: pd.DataFrame) -> pd.Series:
         """
@@ -55,6 +74,7 @@ class MiniExpression:
     def __str__(self) -> str:
         """
         全自动生成的因子唯一字符串 ID，作为缓存键和序列化的核心。
+        子类若未覆盖本方法，则自动递归格式化所有子参数。
         """
         args_str = ",".join(str(arg) for arg in self.args)
         return f"{type(self).__name__}({args_str})"
@@ -144,7 +164,10 @@ class Feature(MiniExpression):
         return f"${self.name}"
 
     def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        pass
+        # 直接提取基础列
+        if self.name in df.columns:
+            return df[self.name]
+        raise KeyError(f"数据集中未发现特征列: {self.name}")
 
     def get_extended_window_size(self) -> Tuple[int, int]:
         return 0, 0

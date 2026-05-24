@@ -1,12 +1,38 @@
 """
-Replica of Qlib Operator Engine - Operators Collection Blueprint
+================================================================================
+                    MiniQlib Operators Collection Engine
+================================================================================
+
+                          MiniExpression (AST Core)
+                                     │
+                                     ▼
+                        ExpressionOps (参数与属性捕获中心)
+                                     │
+        ┌───────────────────┬────────┴───────────┬───────────────────┐
+        │ [__init_subclass__] 类定义时自动拦截     │                   │
+        │ [_params_locked]  叶子节点参数加锁       │                   │
+        ▼                                        ▼                   ▼
+  ElemOperator                             PairOperator         If 算子
+ (单目元素算子)                            (双目配对算子)       (三目选择算子)
+  (e.g., Abs, Sign, Log)                     │                If(cond, L, R)
+                                             ▼
+                                       NpPairOperator
+                                  (Add, Sub, Mul, Div, Gt)
+                                             │
+                                             ▼
+                                          Rolling
+                                       (滚动窗口算子)
+                                  (Ref, Mean, Sum, Max, Min)
+                                    (类级 _func = "mean")
+
 本文件为 mini_qlib 算子的具体收集与设计蓝图。
 已将 MiniExpression, Feature, PFeature 剥离至 expression.py。
-本文件专注于各种算子（Operators）的动态继承、参数捕获与计算设计。
+本文件专注于各种算子的动态继承、参数捕获与计算设计。
 """
 import numpy as np
 import pandas as pd
 import inspect
+import re
 from typing import Union, List, Tuple
 
 # 从底层 AST 地基中引入核心类型，规避循环依赖
@@ -21,24 +47,57 @@ class ExpressionOps(MiniExpression):
     算子基类：ExpressionOps (参数与属性自动捕获中心)
     
     【核心设计：彻底告别重复代码与硬编码】
-    本类利用 Python 的 `inspect.signature` 自动反射子类构造器的签名：
-      1. 自动截取当前调用的实际参数。
-      2. 自动把这些参数通过 `setattr` 绑定到实例上（如 `self.feature = xxx`, `self.N = yyy`）。
-      3. 自动将参数按顺序装入 `self.args = (feature, N)` 中。
-      4. 子类算子从此**完全不需要定义任何 __str__**！
+    本类利用 Python 的 `__init_subclass__` 类钩子与 `inspect.signature` 反射机制，
+    在子类实例化时全自动实现属性解析与绑定，并内置“参数锁（_params_locked）”机制防范多层继承覆盖。
     """
 
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        
+        # 只在子类自身定义了 __init__ 时进行拦截包装；若未定义，则自动继承父类已包裹的 __init__
+        if "__init__" in cls.__dict__:
+            original_init = cls.__init__
+            sig = inspect.signature(original_init)
+            params = [p for p in sig.parameters if p != 'self']
+            
+            def wrapped_init(self, *args, **kwargs):
+                # 只有当最外层子类的第一次调用时（即锁未被占用时），才解析并绑定属性
+                is_root_call = not hasattr(self, '_params_locked')
+                if is_root_call:
+                    self._params_names = params
+                    self._params_values = args
+                    self._params_locked = True  # 锁住参数，防止父类的包装器在此后的继承调用链中再次覆盖
+                    
+                    # 动态反射绑定形参值到 self 属性，并装填 self.args
+                    bound = sig.bind(self, *args, **kwargs)
+                    bound.apply_defaults()
+                    self.args = []
+                    for name, value in bound.arguments.items():
+                        if name != 'self':
+                            setattr(self, name, value)
+                            self.args.append(value)
+                
+                # 执行子类原始的 __init__ 构造逻辑 (如做参数校验等)
+                original_init(self, *args, **kwargs)
+                        
+            cls.__init__ = wrapped_init
+
+    # 基类默认构造，供无需自定义 __init__ 且无父层构造的极致精简子类直接继承使用
     def __init__(self, *args, **kwargs):
-        # 1. 自动获取子类具体的 __init__ 签名并绑定实参
-        # 2. 自动 setattr 绑定传入的因子参数（如 self.feature = args[0] 等）
-        # 3. 自动更新 self.args = args
-        pass
+        self.args = args
+        self.kwargs = kwargs
 
     def get_longest_back_rolling(self) -> int:
         """
         自动追溯子树中所有依赖因子的最长回溯长度。
         """
-        pass
+        # 如果是叶子节点或单因子算子，穿透调用
+        if hasattr(self, "feature"):
+            return self.feature.get_longest_back_rolling()
+        # 如果是双因子算子，取最大值
+        left_br = self.feature_left.get_longest_back_rolling() if isinstance(self.feature_left, MiniExpression) else 0
+        right_br = self.feature_right.get_longest_back_rolling() if isinstance(self.feature_right, MiniExpression) else 0
+        return max(left_br, right_br)
 
 
 # ##############################################################################
@@ -52,10 +111,9 @@ class ElemOperator(ExpressionOps):
     """
     单目元素级计算算子的基类。
     特征：只接收一个子因子 `feature`。
-    扩展窗口大小完全等同于子因子本身的扩展窗口大小。
     """
     def __init__(self, feature: MiniExpression):
-        # 基类 ExpressionOps 会自动绑定 self.feature = feature
+        # 拦截包装器会自动绑定 self.feature = feature，这里无需代码
         pass
 
     def get_extended_window_size(self) -> Tuple[int, int]:
@@ -65,10 +123,10 @@ class ElemOperator(ExpressionOps):
 class Abs(ElemOperator):
     """
     绝对值算子：Abs($close)
-    _load_internal 逻辑：直接对子因子的 pd.Series 执行 .abs()
     """
     def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        pass
+        series = self.feature.load(df)
+        return series.abs()
 
 
 class Log(ElemOperator):
@@ -76,7 +134,8 @@ class Log(ElemOperator):
     对数算子：Log($close)
     """
     def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        pass
+        series = self.feature.load(df)
+        return np.log(series)
 
 
 class Sign(ElemOperator):
@@ -84,7 +143,8 @@ class Sign(ElemOperator):
     符号算子：Sign($close)
     """
     def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        pass
+        series = self.feature.load(df)
+        return np.sign(series)
 
 
 # ==============================================================================
@@ -94,86 +154,102 @@ class PairOperator(ExpressionOps):
     """
     双目配对计算算子的基类。
     特征：接收 `feature_left` 和 `feature_right` 两个输入（可以是子因子，也可以是常数）。
-    扩展窗口大小取左右两个子因子扩展窗口的最大值。
     """
     def __init__(self, feature_left: Union[MiniExpression, float, int], 
                  feature_right: Union[MiniExpression, float, int]):
-        # 基类 ExpressionOps 会自动绑定左右两个特征属性
+        # 拦截包装器会自动绑定 self.feature_left = feature_left, self.feature_right = feature_right
         pass
 
     def get_extended_window_size(self) -> Tuple[int, int]:
-        # 自动追溯左右两边的最大扩展窗口需求
+        left_window = self.feature_left.get_extended_window_size() if isinstance(self.feature_left, MiniExpression) else (0, 0)
+        right_window = self.feature_right.get_extended_window_size() if isinstance(self.feature_right, MiniExpression) else (0, 0)
+        return max(left_window[0], right_window[0]), max(left_window[1], right_window[1])
+
+
+class NpPairOperator(PairOperator):
+    """
+    基于 Numpy 的双目配对计算算子基类。
+    """
+    def __init__(self, feature_left: Union[MiniExpression, float, int], 
+                 feature_right: Union[MiniExpression, float, int], 
+                 func: str):
+        # 拦截包装器会自动绑定 self.feature_left, self.feature_right, self.func
         pass
 
-
-class Add(PairOperator):
-    """
-    加法算子：Add($close, $open) 或 $close + $open
-    """
     def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        pass
+        series_left = self.feature_left.load(df) if isinstance(self.feature_left, MiniExpression) else self.feature_left
+        series_right = self.feature_right.load(df) if isinstance(self.feature_right, MiniExpression) else self.feature_right
+        
+        # 提取底层的 Numpy 计算函数（如 add, subtract, multiply, divide, greater 等）
+        calc_func = getattr(np, self.func)
+        res = calc_func(series_left, series_right)
+        
+        # 保持 Series 形式输出
+        if isinstance(res, (pd.Series, np.ndarray)):
+            # 兼容左侧/右侧是 pd.Series 的 index
+            ref_index = series_left.index if isinstance(series_left, pd.Series) else series_right.index
+            return pd.Series(res, index=ref_index)
+        return res
 
 
-class Sub(PairOperator):
-    """
-    减法算子：Sub($close, $open) 或 $close - $open
-    """
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        pass
+class Add(NpPairOperator):
+    """加法算子：$close + $open"""
+    def __init__(self, feature_left, feature_right):
+        super().__init__(feature_left, feature_right, "add")
 
 
-class Mul(PairOperator):
-    """
-    乘法算子：Mul($close, $open) 或 $close * $open
-    """
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        pass
+class Sub(NpPairOperator):
+    """减法算子：$close - $open"""
+    def __init__(self, feature_left, feature_right):
+        super().__init__(feature_left, feature_right, "subtract")
 
 
-class Div(PairOperator):
-    """
-    除法算子：Div($close, $open) 或 $close / $open
-    """
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        pass
+class Mul(NpPairOperator):
+    """乘法算子：$close * $open"""
+    def __init__(self, feature_left, feature_right):
+        super().__init__(feature_left, feature_right, "multiply")
 
 
-class Gt(PairOperator):
-    """
-    大于算子：Gt($close, $open) 或 $close > $open
-    """
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        pass
+class Div(NpPairOperator):
+    """除法算子：$close / $open"""
+    def __init__(self, feature_left, feature_right):
+        super().__init__(feature_left, feature_right, "divide")
 
 
-class Ge(PairOperator):
+class Gt(NpPairOperator):
+    """大于算子：$close > $open"""
+    def __init__(self, feature_left, feature_right):
+        super().__init__(feature_left, feature_right, "greater")
+
+
+class Ge(NpPairOperator):
     """大于等于：$close >= $open"""
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        pass
+    def __init__(self, feature_left, feature_right):
+        super().__init__(feature_left, feature_right, "greater_equal")
 
 
-class Lt(PairOperator):
+class Lt(NpPairOperator):
     """小于：$close < $open"""
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        pass
+    def __init__(self, feature_left, feature_right):
+        super().__init__(feature_left, feature_right, "less")
 
 
-class Le(PairOperator):
+class Le(NpPairOperator):
     """小于等于：$close <= $open"""
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        pass
+    def __init__(self, feature_left, feature_right):
+        super().__init__(feature_left, feature_right, "less_equal")
 
 
-class Eq(PairOperator):
+class Eq(NpPairOperator):
     """等于：$close == $open"""
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        pass
+    def __init__(self, feature_left, feature_right):
+        super().__init__(feature_left, feature_right, "equal")
 
 
-class Ne(PairOperator):
+class Ne(NpPairOperator):
     """不等于：$close != $open"""
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        pass
+    def __init__(self, feature_left, feature_right):
+        super().__init__(feature_left, feature_right, "not_equal")
 
 
 # ==============================================================================
@@ -190,11 +266,18 @@ class If(ExpressionOps):
         pass
 
     def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        pass
+        cond_series = self.condition.load(df)
+        left_series = self.feature_left.load(df) if isinstance(self.feature_left, MiniExpression) else self.feature_left
+        right_series = self.feature_right.load(df) if isinstance(self.feature_right, MiniExpression) else self.feature_right
+        
+        res = np.where(cond_series, left_series, right_series)
+        return pd.Series(res, index=cond_series.index)
 
     def get_extended_window_size(self) -> Tuple[int, int]:
-        # 取 condition, left, right 三者扩展窗口的最大值
-        pass
+        c_window = self.condition.get_extended_window_size()
+        left_window = self.feature_left.get_extended_window_size() if isinstance(self.feature_left, MiniExpression) else (0, 0)
+        right_window = self.feature_right.get_extended_window_size() if isinstance(self.feature_right, MiniExpression) else (0, 0)
+        return max(c_window[0], left_window[0], right_window[0]), max(c_window[1], left_window[1], right_window[1])
 
 
 # ==============================================================================
@@ -206,30 +289,17 @@ class Rolling(ExpressionOps):
     所有依赖历史时间窗口计算的算子（如 Ref, Mean, Sum 等）都属于这一族。
     
     【高阶无硬编码设计】：
-    - 针对子类硬编码传递 `"mean"` 等字串的痛点，我们设计了类级属性 `_func`。
     - 各个子类（如 Mean）只需在类级别声明 `_func = "mean"`，不需要在 `__init__` 中硬编码传参！
-    - 基类 `Rolling` 在构造时会通过反射读取子类的 `_func` 属性。
-    
-    Parameters
-    ----------
-    feature : MiniExpression
-        作用的子因子
-    N : int
-        滚动的窗口大小。当 N=0 时，自动降级为 expanding（累计扩张窗口计算）。
+    - 基类 `Rolling` 构造器通过 `self._func` 自动反射完成底层计算方法绑定。
     """
     
-    # 默认值，子类进行覆写（例如 _func = "mean"）
     _func = None
 
     def __init__(self, feature: MiniExpression, N: int):
-        # 自动由基类 ExpressionOps 绑定参数
-        # 自动反射当前子类声明的类级别属性 self._func
+        # 拦截包装器会自动绑定 self.feature = feature, self.N = N
         pass
 
     def get_extended_window_size(self) -> Tuple[int, int]:
-        """
-        滚动算子的核心：它必须把子因子的扩展窗口在左侧向历史方向再推 N - 1 天！
-        """
         lft_etd, rght_etd = self.feature.get_extended_window_size()
         if self.N > 0:
             lft_etd = max(lft_etd + self.N - 1, lft_etd)
@@ -242,8 +312,8 @@ class Ref(Rolling):
     由于 shift 计算不是 pandas 内置的通用 rolling 统计指标，它独立处理。
     """
     def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        # series.shift(self.N)
-        pass
+        series = self.feature.load(df)
+        return series.shift(self.N)
 
     def get_extended_window_size(self) -> Tuple[int, int]:
         lft_etd, rght_etd = self.feature.get_extended_window_size()
@@ -255,60 +325,54 @@ class Ref(Rolling):
 
 
 class Mean(Rolling):
-    """
-    滚动均值算子 (移动平均线 MA)：Mean($close, 20)
-    通过声明 `_func = "mean"`，完美托管给基类，彻底省去构造函数硬编码！
-    """
+    """滚动均值算子 (移动平均线 MA)"""
     _func = "mean"
 
     def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        pass
+        series = self.feature.load(df)
+        return series.rolling(self.N, min_periods=1).mean()
 
 
 class Sum(Rolling):
-    """
-    滚动求和算子：Sum($close, 20)
-    """
+    """滚动求和算子"""
     _func = "sum"
 
     def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        pass
+        series = self.feature.load(df)
+        return series.rolling(self.N, min_periods=1).sum()
 
 
 class Std(Rolling):
-    """
-    滚动标准差算子：Std($close, 20)
-    """
+    """滚动标准差算子"""
     _func = "std"
 
     def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        pass
+        series = self.feature.load(df)
+        return series.rolling(self.N, min_periods=1).std()
 
 
 class Max(Rolling):
-    """
-    滚动最大值算子：Max($close, 20)
-    """
+    """滚动最大值算子"""
     _func = "max"
 
     def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        pass
+        series = self.feature.load(df)
+        return series.rolling(self.N, min_periods=1).max()
 
 
 class Min(Rolling):
-    """
-    滚动最小值算子：Min($close, 20)
-    """
+    """滚动最小值算子"""
     _func = "min"
 
     def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        pass
+        series = self.feature.load(df)
+        return series.rolling(self.N, min_periods=1).min()
 
 
 # ==============================================================================
 # 3. 因子引擎表达式解析器策划 (Formula Parser Design)
 # ==============================================================================
-def parse_field(field_str: str) -> str:
+def parse_field(field: str) -> str:
     """
     【架构解析核心函数】
     将用户输入的公式字符串，转换为等价的 Python 表达式代码字串。
@@ -318,4 +382,13 @@ def parse_field(field_str: str) -> str:
     "$$roewa_q" -> "PFeature('roewa_q')"
     "Ref($close, 1) > 0" -> "Ref(Feature('close'), 1) > 0"
     """
-    pass
+    if not isinstance(field, str):
+        field = str(field)
+    
+    chinese_punctuation_regex = r"\u3001\uff1a\uff08\uff09"
+    # 替换 $$[name] -> PFeature('[name]')
+    field = re.sub(rf"\$\$([\w{chinese_punctuation_regex}]+)", r'PFeature("\1")', field)
+    # 替换 $[name] -> Feature('[name]')
+    field = re.sub(rf"\$([\w{chinese_punctuation_regex}]+)", r'Feature("\1")', field)
+    
+    return field
