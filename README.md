@@ -1,74 +1,105 @@
-# MiniQLib 量化数据与开发工作区 (MiniQLib Quantitative Workspace)
+# MiniQLib 统一量化多项目工作区 (Unified Quant-Lab Workspace)
 
-欢迎来到 **MiniQLib** 量化项目工作区！本项目旨在构建一个轻量级、高度模块化的量化研究与回测系统。目前已打通从 **Yahoo Finance** 价格拉取、**SEC EDGAR** 真实财务报表抓取，到本地高效 **DuckDB** 时序与报表数据中心构建的完整数据链路。
+[![Python](https://img.shields.io/badge/Python-3.10-blue.svg?style=flat-square&logo=python)](https://www.python.org/)
+[![Package Manager](https://img.shields.io/badge/uv-workspace-green.svg?style=flat-square)](https://github.com/astral-sh/uv)
+[![Architecture](https://img.shields.io/badge/Architecture-Monorepo-orange.svg?style=flat-square)](https://github.com/20070316lbw-netizen/miniqlib)
+[![License](https://img.shields.io/badge/License-MIT-purple.svg?style=flat-square)](LICENSE)
+
+欢迎来到 **MiniQLib** 统一量化多项目工作区！这是一个基于 **`uv workspace`** 技术构建的高性能量化开发和研究环境。
+
+本项目完美实现了“**数据链路 + 三大主流回测与分析引擎**”的同仓管理。通过根目录的一键依赖托管，你可以在同一个 Python 虚拟环境中无冲突地调用 `Qlib`、`VectorBT` 和 `Zipline`，彻底解决了经典量化库版本冲突的“千古难题”。
+
+---
+
+## 💡 开源复刻与衍生声明 (Fork & Derivative Declarations)
+
+本工作区在本地以子项目的形式集成了以下三大顶级量化金融开源框架。虽然为了日常开发的一键提交与统一管理，我们将它们合并到了本工作区单仓中，但我们在此郑重声明并致敬以下原版项目：
+
+| 子项目名称 (Sub-Project) | 衍生自上游原始仓库 (Derived From) | 授权协议 (License) | 说明 (Notes) |
+| :--- | :--- | :--- | :--- |
+| **`qlib`** | 🍴 [microsoft/qlib](https://github.com/microsoft/qlib) | MIT | 微软 AI 量化投资与机器学习平台，完美保留历史 Commit |
+| **`vectorbt`** | 🍴 [polakowo/vectorbt](https://github.com/polakowo/vectorbt) | Apache-2.0 | 基于 NumPy/Numba 的超高速矢量回测与分析引擎 |
+| **`zipline-reloaded`** | 🍴 [stefan-jansen/zipline-reloaded](https://github.com/stefan-jansen/zipline-reloaded) | Apache-2.0 | 支持多因子与事件驱动的回测引擎（Zipline 的现代化维护分支） |
+
+> 💡 **小贴士**：本仓库中这三个子项目的全部代码和历史 commit 均已完美搬迁至子目录下，任何对这三个库的底层修改都会统一保存在本工作区中。
 
 ---
 
 ## 📁 项目目录结构与文件说明 (Directory Structure & Contents)
 
 ```text
-miniqlib/ (工作区根目录)
+miniqlib/ (工作区大根目录)
 ├── .gemini/                    # Gemini 智能助手本地配置
 │   └── agents/
-│       └── translator.md       # 自定义翻译子代理规范 (定义了中英双语注释与 Docstring 强制要求)
+│       └── translator.md       # 自定义翻译子代理规范 (中英双语注释与 Docstring 强制要求)
+├── .venv/                      # [自动生成] 由 uv workspace 编译的统一高速虚拟环境
 ├── .vscode/                    # VSCode 工作区特定配置
-│   └── settings.json           # VSCode 工作区设置 (已完美配置 DuckDB 插件的自动挂载与默认数据库)
+│   └── settings.json           # VSCode 工作区设置 (已完美配置 DuckDB 插件的自动挂载)
 ├── EXP_and_LOG/                # 每日研究实验、踩坑与解决案日志系统 (核心知识沉淀区)
 │   └── 2026-05-23/
-│       └── vscode_duckdb_and_ssl_issues.md # 记录 DuckDB 文件锁冲突、Windows 编码、Clash 代理 SSL 错误的深度解析
-├── mini_qlib/                  # 本项目核心源码包 (Core Package)
+│       └── vscode_duckdb_and_ssl_issues.md # 记录 DuckDB 文件锁冲突、编码、代理 SSL 错误的解析
+├── mini_qlib/                  # 本项目原生数据与研究模块 (Core Package)
 │   ├── data/                   # 数据加载与处理底层操作
-│   │   ├── __init__.py
 │   │   ├── load_data.py        # 将拉取的股票价格数据加载写入本地数据库
 │   │   └── ops.py              # 底层数据防错与辅助计算操作
 │   ├── database/               # 静态与数据库资产区
-│   │   └── sp500_tickers.csv   # 标普500成分股列表 (包含 symbol, security, sector, sub_industry)
+│   │   └── sp500_tickers.csv   # 标普500成分股列表
 │   ├── fetcher/                # 高效数据抓取模块 (API 层，遵循中英双语注释规范)
-│   │   ├── __init__.py
-│   │   ├── fetch_edgar.py      # [NEW] SEC EDGAR 财务报表底层核心抓取与 XBRL 事实解析模块
+│   │   ├── fetch_edgar.py      # SEC EDGAR 财务报表底层核心抓取与 XBRL 事实解析模块
 │   │   ├── fetch_price.py      # 从 Yahoo Finance 批量拉取日 K 线价格数据
-│   │   └── get_sp_500_list.py  # 维基百科标普500成分股名单抓取与本地缓存模块 (防御性重试与中文编码支持)
+│   │   └── get_sp_500_list.py  # 维基百科标普500成分股名单抓取与本地缓存模块
 │   ├── scripts/                # 业务调度可执行脚本区 (高层应用层)
-│   │   ├── __init__.py
 │   │   ├── fetch_data.py       # 执行标普500价格数据抓取并存入数据库
-│   │   └── fetch_edgar_runner.py # [NEW] 标普500公司 SEC EDGAR 财务报表一键拉取与 DuckDB 增量入库脚本
+│   │   └── fetch_edgar_runner.py # 标普500公司 SEC EDGAR 财务报表一键拉取与 DuckDB 增量入库脚本
 │   └── utils/                  # 通用工具包
-│       ├── __init__.py
-│       └── config.py           # 项目路径、默认数据库连接、YAML 配置文件加载器 (支持 UTF-8 编码防御)
-├── qlib/                       # Qlib 量化回测框架集成区
-│   └── (尚未开发，保持占位)
-├── vectorbt/                   # Vectorbt 矢量回测框架集成区
-│   └── (尚未开发，保持占位)
-├── zipline-reloaded/           # Zipline-Reloaded 事件驱动回测框架集成区
-│   └── (尚未开发，保持占位)
+│       └── config.py           # 项目路径、默认数据库连接、YAML 配置文件加载器
+│
+# ─── 统一托管的三大顶级量化框架子项目 (UV Workspace Members) ───
+├── qlib/                       # [Workspace Member] Microsoft Qlib 框架目录 (带完整历史)
+├── vectorbt/                   # [Workspace Member] VectorBT 矢量回测引擎目录
+├── zipline-reloaded/           # [Workspace Member] Zipline 因子回测引擎目录 (Cython 加速)
+│
 ├── sometest/                   # 个人测试沙盒
-│   └── (尚未开发，保持占位)
 ├── config.yaml                 # 全局模型与回测配置参数文件
-├── edgar.duckdb                # [NEW] SEC EDGAR 真实财务大数据库文件 (内含 25.8 万条 income/balance/cashflow 记录)
-├── main.py                     # 项目入口占位文件
-├── pyproject.toml              # 项目依赖配置文件 (已集成 duckdb, pandas, pyyaml, requests, tqdm)
-└── uv.lock                     # UV 包管理器锁定文件
+├── edgar.duckdb                # SEC EDGAR 真实财务大数据库文件
+├── pyproject.toml              # [核心配置] 声明 uv workspace 架构和跨项目依赖关系
+└── uv.lock                     # [自动生成] 锁定的工作区全量依赖树
 ```
 
 ---
 
-## 🚀 核心功能模块指引 (Core Feature Guides)
+## ⚡ 现代 Workspace 环境极速上手指南 (Modern Workspace Guide)
 
-### 1. SEC EDGAR 财务数据抓取与入库
-* **方法库**：`mini_qlib/fetcher/fetch_edgar.py`  
-  支持从美国证券交易委员会（SEC）批量拉取公司 XBRL 财务明细，智能归纳利润表（Income）、资产负债表（Balance）及现金流量表（Cashflow），并自动整理为**无前视偏差的点对点（Point-in-Time）**时序数据。
-* **执行器**：`mini_qlib/scripts/fetch_edgar_runner.py`  
-  一键拉取标普500成分股的所有报表数据，支持**断点续传**，网络超时自动重试，以及本地代理（Clash）的 SSL 证书安全信任防崩溃机制。
+本工作区使用超高速 Python 包管理器 [**`uv`**](https://github.com/astral-sh/uv) 统一管理：
 
-### 2. 标普500成分股维护
-* **管理模块**：`mini_qlib/fetcher/get_sp_500_list.py`  
-  自动以缓存优先（Cache-First）的原则加载标普500成分股。若本地无缓存，则自动抓取维基百科并以 `utf-8` 编码格式安全固化到本地 CSV，彻底避免了历史回测数据无法复现的问题。
+### 1. 一键同步并安装全部依赖 (包括三大子项目)
+在工作区根目录下打开终端，直接运行：
+```powershell
+uv sync
+```
+这行命令会：
+* 自动检测 `.python-version`，在本地安装 Python 3.10.x（如果不存在的话）；
+* 为这三个子项目（`qlib`、`vectorbt`、`zipline`）编译它们所需的 Cython 与底层二进制依赖；
+* **以 `editable` (可编辑开发) 的形式**直接将它们软链接安装到根目录的统一 `.venv` 虚拟环境中！
+
+### 2. 启动共享的研究工作台 (Jupyter Lab)
+在根目录下运行：
+```powershell
+uv run jupyter lab
+```
+在打开的 Jupyter Notebook 中，你可以直接在同一个 Kernel 里同时运行：
+```python
+import qlib
+import vectorbt as vbt
+import zipline
+print("🚀 三大引擎完美共存！")
+```
 
 ---
 
 ## 📝 团队开发契约与规范 (Development Conventions)
 
-为保证项目代码的国际化水准与国内团队极速阅读体验，本项目严格遵守以下两条开发契约：
+为保证项目代码的国际化水准与团队阅读体验，本项目严格遵守以下两条开发契约：
 
 1. 🌐 **中英双语注释契约 (Bilingual Commenting)**
    所有新编写的底层方法库和高阶脚本，其内的 docstrings、模块说明、关键行代码注释**必须采用英文与中文双语对照编写**（英文在上，精确中文在下），并由 `.gemini/agents/translator.md` 进行自动化规范。

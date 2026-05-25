@@ -1,17 +1,38 @@
 [project]
 name = "miniqlib"
 version = "0.1.0"
-description = "Add your description here"
+description = "A unified quantitative finance workspace hosting qlib, vectorbt, and zipline-reloaded"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10,<3.11"
 dependencies = [
-    "duckdb>=1.5.3",
-    "lxml>=6.1.1",
-    "numpy>=2.4.6",
-    "pandas>=3.0.3",
-    "pyyaml>=6.0.3",
-    "qlib>=0.0.2.dev20",
-    "requests>=2.34.2",
-    "tqdm>=4.67.3",
-    "yfinance>=1.3.0",
+    "duckdb>=1.0.0",
+    "lightgbm>=3.3.5",
+    "lxml>=4.9.0",
+    "pyyaml>=6.0",
+    "requests>=2.31.0",
+    "tqdm>=4.65.0",
+    "yfinance>=0.2.38",
+    "jupyterlab>=4.0.0",
+    "matplotlib>=3.7.0",
+    "pyqlib",
+    "vectorbt",
+    "zipline-reloaded",
+]
+
+[tool.uv.workspace]
+members = [
+    "qlib",
+    "vectorbt",
+    "zipline-reloaded",
+]
+
+[tool.uv.sources]
+pyqlib = { workspace = true }
+vectorbt = { workspace = true }
+zipline-reloaded = { workspace = true }
+
+[tool.uv]
+override-dependencies = [
+    "mypy>=1.10.0",
+    "pandas-ta-classic; python_version == '1.0'",
 ]

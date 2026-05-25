@@ -1,0 +1,24 @@
+data:
+  start: '2016-05-18'
+  end: '2026-05-15'
+  splits:
+    train:
+      start: '2016-05-18'
+      end: '2024-05-15'      
+    embargo:
+      days: 10                 
+    test:
+      start: '2024-05-24'    
+      end: '2026-05-15'
+model:
+  objective: regression
+  num_leaves: 31
+  learning_rate: 0.05
+  feature_fraction: 0.9
+  bagging_fraction: 0.8
+  bagging_freq: 5
+  verbose: -1
+train_control:
+  num_boost_round: 1000      
+  early_stopping: 50         
+  valid_frac: 0.2   

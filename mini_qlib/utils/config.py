@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 # 数据库配置
 # ============================================================
 DB_DIR = PROJECT_ROOT / "mini_qlib" / "database"
-DEFAULT_DB = DB_DIR / " edgar.duckdb "
+DEFAULT_DB = DB_DIR / "edgar.duckdb"
 
 
 # ============================================================
