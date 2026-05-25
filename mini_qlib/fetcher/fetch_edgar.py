@@ -10,12 +10,7 @@ import requests
 import pandas as pd
 import duckdb
 import time
-import urllib3
 from pathlib import Path
-
-# Disable SSL warnings for robust proxy connection
-# 禁用 SSL 警告以确保代理连接的稳健性
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ── DEFAULT CONFIG / 默认配置 ──────────────────────────────────────────────────
 
@@ -44,7 +39,7 @@ CASHFLOW_CONCEPTS = {
 
 # ── SEC EDGAR API FUNCTIONS / SEC EDGAR API 函数 ───────────────────────────────
 
-def get_cik_map(headers: dict, verify: bool = False) -> dict:
+def get_cik_map(headers: dict, verify: bool = True) -> dict:
     """
     Fetch the complete mapping of tickers to CIKs from SEC EDGAR.
     从 SEC EDGAR 获取完整的股票代码（Ticker）到 CIK 的映射表。
@@ -60,7 +55,7 @@ def get_cik_map(headers: dict, verify: bool = False) -> dict:
         raise ConnectionError(f"Failed to fetch CIK mapping from SEC. HTTP Status: {resp.status_code}")
 
 
-def fetch_company_facts(cik: str, headers: dict, verify: bool = False) -> dict | None:
+def fetch_company_facts(cik: str, headers: dict, verify: bool = True) -> dict | None:
     """
     Fetch all XBRL facts for a given company CIK from SEC EDGAR API.
     从 SEC EDGAR API 获取指定公司 CIK 的所有原始 XBRL 事实数据。

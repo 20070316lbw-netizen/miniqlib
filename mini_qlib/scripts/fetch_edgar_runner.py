@@ -70,7 +70,7 @@ def main():
 
     print("获取CIK映射表...")
     try:
-        cik_map = get_cik_map(headers=HEADERS, verify=False)
+        cik_map = get_cik_map(headers=HEADERS)
     except Exception as e:
         print(f"获取CIK映射表失败: {e}")
         con.close()
@@ -93,7 +93,7 @@ def main():
 
         # Fetch facts
         # 拉取公司财务事实数据
-        facts = fetch_company_facts(cik, headers=HEADERS, verify=False)
+        facts = fetch_company_facts(cik, headers=HEADERS)
         time.sleep(RATE_LIMIT)
 
         if not facts:
