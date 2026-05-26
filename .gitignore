@@ -22,9 +22,4 @@ Thumbs.db
 .env
 secrets.*
 config_private.yaml
-
-
-# 其他
-vectorbt/
-qlib/
-zipline-reloaded/
+
