@@ -4,5 +4,6 @@
 
 from .label import label_registry
 from .feature import feature_registry
+from . import fundamental
 
 __all__ = ["label_registry", "feature_registry"]

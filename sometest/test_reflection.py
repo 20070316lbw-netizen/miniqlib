@@ -29,8 +29,11 @@ import sys
 from pathlib import Path
 
 # 确保在 Windows 控制台下能够正确打印 UTF-8 编码的 Emoji 和中文
-if sys.stdout.encoding.lower() != 'utf-8':
-    sys.stdout.reconfigure(encoding='utf-8')
+try:
+    if sys.stdout.encoding.lower() != 'utf-8':
+        sys.stdout.reconfigure(encoding='utf-8')
+except (AttributeError, OSError):
+    pass
 
 # 将项目根目录添加到 Python 路径中，以便能够干净地导入 mini_qlib
 PROJECT_ROOT = Path(__file__).resolve().parent.parent

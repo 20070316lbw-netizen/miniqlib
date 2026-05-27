@@ -9,8 +9,11 @@ import pandas as pd
 import numpy as np
 
 # Ensure Windows prints emoji correctly
-if sys.stdout.encoding.lower() != 'utf-8':
-    sys.stdout.reconfigure(encoding='utf-8')
+try:
+    if sys.stdout.encoding.lower() != 'utf-8':
+        sys.stdout.reconfigure(encoding='utf-8')
+except (AttributeError, OSError):
+    pass
 
 # Add project root to python path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent

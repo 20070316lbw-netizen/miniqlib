@@ -22,6 +22,10 @@ data_handler:
     VMA10: "VMA10"               # 10日均量偏离：Mean($volume,10)/($volume+1e-12)-1
     RSV5: "RSV5"                 # 5日 RSV 随机指标：当前价格相对5天最高最低位置
     
+    # ─── 财务基本面特征 (时点 Point-in-Time) ───
+    ROE: "ROE"                   # 净资产收益率：$$net_income/$$equity
+    Leverage: "Leverage"         # 资产负债率：$$total_liabilities/$$total_assets
+    
     # ─── 纯自定义表达式 (无需进入注册表即可自由扩展) ───
     CUSTOM_BIAS: "Mean($close,20)/$close-1"  # 20日均价偏离率
 

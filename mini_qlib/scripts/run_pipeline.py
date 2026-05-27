@@ -20,8 +20,11 @@ import lightgbm as lgb
 from pathlib import Path
 
 # Ensure Windows console prints emoji and UTF-8 characters safely
-if sys.stdout.encoding.lower() != 'utf-8':
-    sys.stdout.reconfigure(encoding='utf-8')
+try:
+    if sys.stdout.encoding.lower() != 'utf-8':
+        sys.stdout.reconfigure(encoding='utf-8')
+except (AttributeError, OSError):
+    pass
 
 # ──────────────────────────────────────────────────────────────────────────
 # 1. 规避 ModuleNotFoundError 坑，确保根目录在 sys.path 中
@@ -32,6 +35,9 @@ sys.path.insert(0, str(PROJECT_ROOT / "mini_qlib"))
 
 from mini_qlib.data.load_data import read_prices
 from mini_qlib.data.handler import DataHandler
+from mini_qlib.backtest.backtest import run_backtest
+from mini_qlib.utils.log import configure_root
+import logging
 
 
 def load_config(config_path: Path) -> dict:
@@ -97,6 +103,7 @@ def evaluate_rank_ic(pred: pd.Series, label: pd.Series) -> pd.DataFrame:
 
 
 def main():
+    configure_root(level=logging.INFO)
     print("=" * 70)
     print("🚀 MiniQLib 配置链驱动流水线启动 / Config-driven Pipeline Started")
     print("=" * 70)
@@ -216,7 +223,56 @@ def main():
     print("=" * 55)
     print(ic_report.to_string(index=False, float_format=lambda x: f"{x: .6f}"))
     print("=" * 55)
-    print("🎉 预测流水线全部流程执行完毕！")
+    
+    # 7. 一键闭环高保真事件驱动回测 (End-to-End High-Fidelity Event-driven Backtest)
+    print("\n🏁 7. 正在拉起高保真事件驱动回测引擎 (Launching high-fidelity backtest)...")
+    # Using default parameters: K=5, initial_cash=1,000,000.0
+    backtest_result = run_backtest(
+        df=df,
+        predictions=test_pred_series,
+        initial_cash=1000000.0,
+        K=5,
+        max_volume_ratio=0.1,
+        slippage=0.0005,
+        fee_rate=0.0003,
+        tax_rate=0.001
+    )
+    
+    # Calculate performance metrics for the portfolio NAV series
+    # 结算回测净值序列的各项核心理财指标
+    nav_series = backtest_result["nav"]
+    daily_returns = nav_series.pct_change().dropna()
+    
+    total_return = (nav_series.iloc[-1] / nav_series.iloc[0]) - 1.0
+    n_days = len(nav_series)
+    
+    # Annualized Return (assuming 252 trading days per year)
+    # 年化收益率（以每年 252 交易日测算）
+    annualized_return = (1.0 + total_return) ** (252.0 / n_days) - 1.0 if n_days > 0 else 0.0
+    
+    # Annualized Sharpe Ratio (no-risk rate assumed as 0.0)
+    # 年化夏普比率（假设无风险收益率为 0）
+    sharpe_ratio = np.sqrt(252.0) * (daily_returns.mean() / daily_returns.std()) if daily_returns.std() > 0 else 0.0
+    
+    # Max Drawdown calculation
+    # 最大回撤计算
+    cum_max = nav_series.cummax()
+    drawdowns = (cum_max - nav_series) / cum_max
+    max_drawdown = drawdowns.max()
+    
+    print("\n" + "=" * 55)
+    print("📈 MiniQLib 策略事件驱动回测业绩报告 (Backtest Report)")
+    print("=" * 55)
+    print(f"   起始账户资金 (Initial Capital):  1,000,000.00 USD")
+    print(f"   期末账户总值 (Final NAV):        {nav_series.iloc[-1]:,.2f} USD")
+    print(f"   回测总交易日 (Trading Days):     {n_days} 天")
+    print(f"   累计绝对收益 (Total Return):     {total_return * 100:.4f}%")
+    print(f"   年化复利收益 (Ann Return):       {annualized_return * 100:.4f}%")
+    print(f"   年化夏普比率 (Sharpe Ratio):     {sharpe_ratio:.4f}")
+    print(f"   最大历史回撤 (Max Drawdown):     {max_drawdown * 100:.4f}%")
+    print("=" * 55)
+    print("🎉 一站式量化多因子与事件回测流水线运行圆满结束！")
+
 
 
 if __name__ == "__main__":

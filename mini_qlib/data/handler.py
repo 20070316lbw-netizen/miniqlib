@@ -11,7 +11,7 @@
 4. 格式输出：将所有的特征和标签整合成带有完整 MultiIndex (date, ticker) 的最终训练 DataFrame。
 """
 import pandas as pd
-from typing import Dict, Union, Any, List
+from typing import Optional, Dict, Union, Any, List
 from mini_qlib.data.expression import MiniExpression
 from mini_qlib.data.ops import parse_field, get_op_namespace
 from mini_qlib.factor import label_registry, feature_registry
@@ -103,7 +103,7 @@ class DataHandler:
         
         raise TypeError(f"不支持的因子描述类型 {type(expr)}: {expr}")
 
-    def setup(self, context: dict = None) -> pd.DataFrame:
+    def setup(self, context: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
         """
         执行因子与标签的高性能结算计算。
         

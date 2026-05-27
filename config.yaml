@@ -1,0 +1,13 @@
+# ==============================================================================
+# MiniQLib Global Configuration Template
+# MiniQLib 全局配置模板
+# ==============================================================================
+# 
+# This file holds model, data, and backtest parameters.
+# For private keys (API tokens, email, etc.), use config_private.yaml instead.
+# 本文件存放模型、数据和回测参数。
+# 私人密钥（API Token、邮箱等）请使用 config_private.yaml。
+# ==============================================================================
+
+# ── Placeholder: 此文件当前为空模板，实际流水线配置请见 config_pipeline.yaml ──
+# ── Placeholder: This file is a template; see config_pipeline.yaml for pipeline config ──

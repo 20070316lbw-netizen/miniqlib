@@ -502,8 +502,11 @@ if __name__ == "__main__":
     
     # 确保 Windows 下能够正确打印 UTF-8 编码的文字
     # Ensure Windows console correctly prints UTF-8 encoded text
-    if sys.stdout.encoding.lower() != 'utf-8':
-        sys.stdout.reconfigure(encoding='utf-8')
+    try:
+        if sys.stdout.encoding.lower() != 'utf-8':
+            sys.stdout.reconfigure(encoding='utf-8')
+    except (AttributeError, OSError):
+        pass
         
     # 添加项目根目录和 sometest 目录到 python 路径
     # Add project root and sometest to python path
@@ -517,7 +520,8 @@ if __name__ == "__main__":
 
     # 1. 尝试从数据库读取价格数据
     # 1. Try to read price data from the database
-    from mini_qlib.data.load_data import read_prices, get_db, init_prices_table, insert_prices
+    from mini_qlib.data.load_data import read_prices, init_prices_table, insert_prices
+    from mini_qlib.utils.config import get_price_db
     
     print("Connecting to database and checking price data...")
     db_ok = False
@@ -526,7 +530,7 @@ if __name__ == "__main__":
         if df_prices.empty:
             print("Database is empty, generating high-fidelity simulated prices and writing to DB...")
             df_mock = generate_mock_prices()
-            with get_db() as con:
+            with get_price_db(read_only=False) as con:
                 init_prices_table(con)
                 insert_prices(con, df_mock)
             print("Mock prices successfully written to database!")

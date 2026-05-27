@@ -21,8 +21,13 @@
 本文件包含 mini_qlib 算子引擎的底层 AST 计算树基类与原子特征类。
 作为整个系统的地基，它与具体算子分离，以彻底规避循环导入风险。
 """
+from __future__ import annotations
+
 import pandas as pd
-from typing import Union, List, Tuple
+from typing import Optional, Dict, Any, Union, List, Tuple
+import logging
+
+_log = logging.getLogger(__name__)
 
 
 class MiniExpression:
@@ -48,21 +53,25 @@ class MiniExpression:
         self.args = args
         self.kwargs = kwargs
 
-    def load(self, df: pd.DataFrame, context: dict = None) -> pd.Series:
+    def load(self, df: pd.DataFrame, context: Optional[Dict[str, Any]] = None) -> pd.Series:
         """
         因子计算与加载的统一入口。
+        Unified entry point for factor computation and loading.
         
         Parameters
         ----------
         df : pd.DataFrame
             输入的原始数据集，要求包含双重索引（datetime, ticker）或单重索引（datetime）。
+            Input raw dataset, must contain a dual index (datetime, ticker) or single index (datetime).
         context : dict, optional
             缓存上下文，用于避免重复计算子表达式。
+            Cache context dict used to avoid redundant sub-expression computation.
             
         Returns
         -------
         pd.Series
             计算完成的单因子序列，其 Index 必须与输入的 df 保持完全一致。
+            Computed single factor series whose index must be exactly aligned with the input df.
         """
         if context is None:
             return self._load_internal(df)
@@ -72,9 +81,10 @@ class MiniExpression:
             context[key] = self._load_internal(df, context=context)
         return context[key]
 
-    def _load_internal(self, df: pd.DataFrame, context: dict = None) -> pd.Series:
+    def _load_internal(self, df: pd.DataFrame, context: Optional[Dict[str, Any]] = None) -> pd.Series:
         """
         具体的因子计算逻辑，由各个子类算子（如 Ref, Mean, Add）各自实现。
+        Concrete factor computation logic, implemented by each subclass operator (e.g., Ref, Mean, Add).
         """
         raise NotImplementedError("每个具体的算子必须实现 _load_internal 方法！")
 
@@ -170,7 +180,7 @@ class Feature(MiniExpression):
     def __str__(self) -> str:
         return f"${self.name}"
 
-    def _load_internal(self, df: pd.DataFrame, context: dict = None) -> pd.Series:
+    def _load_internal(self, df: pd.DataFrame, context: Optional[Dict[str, Any]] = None) -> pd.Series:
         # 直接提取基础列
         if self.name in df.columns:
             return df[self.name]
@@ -184,6 +194,99 @@ class PFeature(Feature):
     """
     Point-in-Time 基础特征算子。
     __str__ 返回 "$$name"，用于处理带版本演进的财务数据。
+    现在支持 context 缓存，避免同一 AST 中多次引用相同财务指标时的重复数据库查询。
     """
     def __str__(self) -> str:
         return f"$${self.name}"
+
+    def _load_internal(self, df: pd.DataFrame, context: Optional[Dict[str, Any]] = None) -> pd.Series:
+        # PFeature queries the edgar.duckdb database and performs Point-in-Time (PIT) alignment
+        # using an O(N log N) ASOF merge in pandas, ensuring zero future look-ahead bias.
+        # PFeature 查询 edgar.duckdb 数据库并执行 Point-in-Time (PIT) 对齐，
+        # 使用 pandas 的 O(N log N) ASOF merge，确保零未来前瞻偏差。
+        
+        name = self.name.lower()
+        
+        # Check column mapping to target tables
+        COLUMN_TO_TABLE = {
+            "revenue": "income",
+            "gross_profit": "income",
+            "op_income": "income",
+            "net_income": "income",
+            "eps_diluted": "income",
+            "total_assets": "balance",
+            "total_liabilities": "balance",
+            "equity": "balance",
+            "cash": "balance",
+            "total_debt": "balance",
+            "cfo": "cashflow",
+            "capex": "cashflow",
+            "fcf_direct": "cashflow"
+        }
+        
+        if name not in COLUMN_TO_TABLE:
+            raise KeyError(
+                f"❌ PIT基本面列 '{self.name}' 不在支持的字段列表中。\n"
+                f"   可用字段包括: {list(COLUMN_TO_TABLE.keys())}"
+            )
+            
+        table_name = COLUMN_TO_TABLE[name]
+        
+        # Open connection to default edgar.duckdb
+        from mini_qlib.utils.config import get_db
+        
+        try:
+            with get_db(read_only=True) as conn:
+                query = f"SELECT ticker, filed, period_end, {name} FROM {table_name} ORDER BY ticker, filed"
+                fund_df = conn.execute(query).df()
+        except Exception as e:
+            # Log the error so users can diagnose why factor values are NaN
+            # 记录错误日志，方便用户排查为何因子结果全为 NaN
+            _log.warning(
+                "PFeature '%s' 数据库查询失败 (database query failed): %s. 返回全 NaN 序列。",
+                self.name, e
+            )
+            return pd.Series(index=df.index, dtype="float64")
+                
+        if fund_df.empty:
+            _log.info(
+                "PFeature '%s' 查询结果为空 (no data in table '%s'), 返回全 NaN 序列。",
+                self.name, table_name
+            )
+            return pd.Series(index=df.index, dtype="float64")
+            
+        # Parse dates to pandas Timestamp objects
+        fund_df["filed"] = pd.to_datetime(fund_df["filed"])
+        fund_df["period_end"] = pd.to_datetime(fund_df["period_end"])
+        
+        # Deduplicate revisions on same filed date: keep latest revision (max period_end)
+        fund_df = fund_df.sort_values(by=["ticker", "filed", "period_end"])
+        fund_df = fund_df.drop_duplicates(subset=["ticker", "filed"], keep="last")
+        
+        # Reset price DataFrame index to enable merge_asof on a single column
+        prices = df.reset_index()
+        # pandas requires date index to be strictly sorted for ASOF merge
+        prices_sorted = prices.sort_values(by="date")
+        
+        # Align column names for merge_asof
+        fund_df = fund_df.rename(columns={"filed": "date"})
+        fund_sorted = fund_df[["ticker", "date", name]].sort_values(by="date")
+        
+        # Force identical datetime64[ns] dtype to prevent ASOF merge errors in pandas 2.0+
+        prices_sorted["date"] = prices_sorted["date"].astype("datetime64[ns]")
+        fund_sorted["date"] = fund_sorted["date"].astype("datetime64[ns]")
+        
+        # Perform highly optimized ASOF merge
+        # 'backward' matches latest filing on or before the price date for each ticker
+        merged = pd.merge_asof(
+            prices_sorted,
+            fund_sorted,
+            on="date",
+            by="ticker",
+            direction="backward"
+        )
+        
+        # Restore index and reorder to match input df
+        merged = merged.set_index(["date", "ticker"]).sort_index()
+        result_series = merged[name].reindex(df.index)
+        return result_series

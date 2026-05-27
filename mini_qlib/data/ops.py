@@ -33,7 +33,7 @@ import numpy as np
 import pandas as pd
 import inspect
 import re
-from typing import Union, List, Tuple
+from typing import Optional, Dict, Any, Union, List, Tuple
 
 # 从底层 AST 地基中引入核心类型，规避循环依赖
 from .expression import MiniExpression, Feature, PFeature
@@ -48,8 +48,11 @@ class ExpressionOps(MiniExpression):
     
     【核心设计：彻底告别重复代码与硬编码】
     本类利用 Python 的 `__init_subclass__` 类钩子与 `inspect.signature` 反射机制，
-    在子类实例化时全自动实现属性解析与绑定，并内置“参数锁（_params_locked）”机制防范多层继承覆盖。
+    在子类实例化时全自动实现属性解析与绑定，并内置"参数锁（_params_locked）"机制防范多层继承覆盖。
     """
+
+    _params_locked: bool = False  # 类级默认值；由 __init_subclass__ 包装器在根调用时置为 True
+    # class-level default; set to True by __init_subclass__ wrapper on root call
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -62,7 +65,8 @@ class ExpressionOps(MiniExpression):
             
             def wrapped_init(self, *args, **kwargs):
                 # 只有当最外层子类的第一次调用时（即锁未被占用时），才解析并绑定属性
-                is_root_call = not hasattr(self, '_params_locked')
+                # Only parse and bind attributes on the outermost (root) subclass call when the lock is free.
+                is_root_call = not self._params_locked
                 if is_root_call:
                     self._params_names = params
                     self._params_values = args
@@ -94,21 +98,34 @@ class ExpressionOps(MiniExpression):
                         
             cls.__init__ = wrapped_init
 
-    # 基类默认构造，供无需自定义 __init__ 且无父层构造的极致精简子类直接继承使用
+    # 基类默认构造：仅当子类未被 __init_subclass__ 包装（即子类未定义 __init__）时才生效。
+    # 如果 __init_subclass__ 已经通过 wrapped_init 绑定过参数（此时 _params_locked=True），
+    # 则跳过 args/kwargs 赋值，避免覆盖包装器精心构建的扁平化 args 列表。
+    # Base default constructor: only takes effect when the subclass was NOT wrapped by
+    # __init_subclass__ (i.e., the subclass did not define its own __init__).
+    # If __init_subclass__ already bound parameters via wrapped_init (_params_locked=True),
+    # skip args/kwargs assignment to avoid overwriting the carefully flattened args list.
     def __init__(self, *args, **kwargs):
-        self.args = args
-        self.kwargs = kwargs
+        if not self._params_locked:
+            self.args = args
+            self.kwargs = kwargs
 
+    # DEPRECATED: 历史上用于自动追溯回溯窗口长度，目前未被生产代码调用。
+    # 保留此方法以便未来可能的高级数据加载窗口扩展逻辑使用。
     def get_longest_back_rolling(self) -> int:
         """
-        自动追溯子树中所有依赖因子的最长回溯长度。
+        [DEPRECATED] 自动追溯子树中所有依赖因子的最长回溯长度。
+        Currently unused in production code; retained for potential future use.
+        Auto-trace the longest lookback window across all dependent sub-factors.
         """
-        # 如果是叶子节点或单因子算子，穿透调用
-        if hasattr(self, "feature"):
+        _FEATURE_SENTINEL = object()
+        feature_attr = getattr(self, "feature", _FEATURE_SENTINEL)
+        if feature_attr is not _FEATURE_SENTINEL:
+            if not isinstance(feature_attr, MiniExpression):
+                return 0
             return self.feature.get_longest_back_rolling()
-        # 如果是双因子算子，取最大值
-        left_br = self.feature_left.get_longest_back_rolling() if isinstance(self.feature_left, MiniExpression) else 0
-        right_br = self.feature_right.get_longest_back_rolling() if isinstance(self.feature_right, MiniExpression) else 0
+        left_br = self.feature_left.get_longest_back_rolling() if isinstance(getattr(self, "feature_left", None), MiniExpression) else 0
+        right_br = self.feature_right.get_longest_back_rolling() if isinstance(getattr(self, "feature_right", None), MiniExpression) else 0
         return max(left_br, right_br)
 
 
@@ -136,7 +153,7 @@ class Abs(ElemOperator):
     """
     绝对值算子：Abs($close)
     """
-    def _load_internal(self, df: pd.DataFrame, context: dict = None) -> pd.Series:
+    def _load_internal(self, df: pd.DataFrame, context: Optional[Dict[str, Any]] = None) -> pd.Series:
         series = self.feature.load(df, context=context)
         return series.abs()
 
@@ -145,16 +162,18 @@ class Log(ElemOperator):
     """
     对数算子：Log($close)
     """
-    def _load_internal(self, df: pd.DataFrame, context: dict = None) -> pd.Series:
+    def _load_internal(self, df: pd.DataFrame, context: Optional[Dict[str, Any]] = None) -> pd.Series:
         series = self.feature.load(df, context=context)
-        return np.log(series)
+        # Replace non-positive values with NaN to avoid -inf and log of negative numbers
+        safe_series = series.where(series > 0)
+        return np.log(safe_series)
 
 
 class Sign(ElemOperator):
     """
     符号算子：Sign($close)
     """
-    def _load_internal(self, df: pd.DataFrame, context: dict = None) -> pd.Series:
+    def _load_internal(self, df: pd.DataFrame, context: Optional[Dict[str, Any]] = None) -> pd.Series:
         series = self.feature.load(df, context=context)
         return np.sign(series)
 
@@ -168,7 +187,7 @@ class PairOperator(ExpressionOps):
     特征：接收 `feature_left` 和 `feature_right` 两个输入（可以是子因子，也可以是常数）。
     """
     def __init__(self, feature_left: Union[MiniExpression, float, int], 
-                 feature_right: Union[MiniExpression, float, int]):
+                  feature_right: Union[MiniExpression, float, int]):
         # 拦截包装器会自动绑定 self.feature_left = feature_left, self.feature_right = feature_right
         pass
 
@@ -183,24 +202,49 @@ class NpPairOperator(PairOperator):
     基于 Numpy 的双目配对计算算子基类。
     """
     def __init__(self, feature_left: Union[MiniExpression, float, int], 
-                 feature_right: Union[MiniExpression, float, int], 
-                 func: str):
+                  feature_right: Union[MiniExpression, float, int], 
+                  func: str):
         # 拦截包装器会自动绑定 self.feature_left, self.feature_right, self.func
         pass
 
-    def _load_internal(self, df: pd.DataFrame, context: dict = None) -> pd.Series:
-        series_left = self.feature_left.load(df, context=context) if isinstance(self.feature_left, MiniExpression) else self.feature_left
-        series_right = self.feature_right.load(df, context=context) if isinstance(self.feature_right, MiniExpression) else self.feature_right
-        
+    def _load_internal(self, df: pd.DataFrame, context: Optional[Dict[str, Any]] = None) -> pd.Series:
+        # 解析左右操作数：若为表达式则递归计算，否则直接使用标量
+        # Resolve left and right operands: recurse if expression, otherwise use scalar directly.
+        series_left = (
+            self.feature_left.load(df, context=context)
+            if isinstance(self.feature_left, MiniExpression)
+            else self.feature_left
+        )
+        series_right = (
+            self.feature_right.load(df, context=context)
+            if isinstance(self.feature_right, MiniExpression)
+            else self.feature_right
+        )
+
         # 提取底层的 Numpy 计算函数（如 add, subtract, multiply, divide, greater 等）
+        # Extract the underlying numpy calculation function (e.g., add, subtract, multiply, divide, greater, etc.)
         calc_func = getattr(np, self.func)
         res = calc_func(series_left, series_right)
-        
-        # 保持 Series 形式输出
-        if isinstance(res, (pd.Series, np.ndarray)):
-            # 兼容左侧/右侧是 pd.Series 的 index
-            ref_index = series_left.index if isinstance(series_left, pd.Series) else series_right.index
-            return pd.Series(res, index=ref_index)
+
+        # 若 numpy 已返回带索引的 Series（pandas 自动索引对齐），直接返回，
+        # 避免冗余的 pd.Series() 二次包装。
+        # If numpy already returned an indexed Series (pandas auto-alignment),
+        # return directly to avoid redundant pd.Series re-wrapping.
+        if isinstance(res, pd.Series):
+            return res
+        # 若结果为裸 ndarray（如标量运算导致），从有效的 Series 侧重建索引。
+        # If the result is a bare ndarray (e.g., from scalar operands),
+        # reconstruct the index from the valid Series side.
+        if isinstance(res, np.ndarray):
+            ref_series = (
+                series_left if isinstance(series_left, pd.Series) else series_right
+            )
+            if isinstance(ref_series, pd.Series):
+                return pd.Series(res, index=ref_series.index)
+            # 防御性兜底：两个操作数都是标量的极端情况，返回无索引的 ndarray 包装
+            # Defensive fallback: extreme case where both operands are scalars,
+            # wrap as Series with default RangeIndex
+            return pd.Series(res)
         return res
 
 
@@ -285,11 +329,11 @@ class If(ExpressionOps):
     当 condition 满足时返回 left，否则返回 right。
     """
     def __init__(self, condition: MiniExpression, 
-                 feature_left: Union[MiniExpression, float, int], 
-                 feature_right: Union[MiniExpression, float, int]):
+                  feature_left: Union[MiniExpression, float, int], 
+                  feature_right: Union[MiniExpression, float, int]):
         pass
 
-    def _load_internal(self, df: pd.DataFrame, context: dict = None) -> pd.Series:
+    def _load_internal(self, df: pd.DataFrame, context: Optional[Dict[str, Any]] = None) -> pd.Series:
         cond_series = self.condition.load(df, context=context)
         left_series = self.feature_left.load(df, context=context) if isinstance(self.feature_left, MiniExpression) else self.feature_left
         right_series = self.feature_right.load(df, context=context) if isinstance(self.feature_right, MiniExpression) else self.feature_right
@@ -323,8 +367,9 @@ class Rolling(ExpressionOps):
     """
     
     _func = None
+    _DEFAULT_MIN_PERIODS: int = 1  # 默认最小有效观测数 / default minimum observation count
 
-    def __init__(self, feature: MiniExpression, N: int, min_periods: int = 1):
+    def __init__(self, feature: MiniExpression, N: int, min_periods: int = _DEFAULT_MIN_PERIODS):
         """
         Parameters
         ----------
@@ -341,14 +386,22 @@ class Rolling(ExpressionOps):
 
     def __str__(self) -> str:
         """
-        根据 min_periods 是否为默认值 1，动态生成最简公式字符串。
-        Dynamically generate the simplified formula string based on whether min_periods is the default 1.
+        根据 min_periods 是否为类默认值，动态生成最简公式字符串。
+        Dynamically generate the simplified formula string based on whether
+        min_periods equals the class default _DEFAULT_MIN_PERIODS.
         """
-        if hasattr(self, 'min_periods') and self.min_periods != 1:
-            return f"{type(self).__name__}({self.feature},{self.N},{self.min_periods})"
+        # 使用 getattr 安全回退，同时对 None 值做防御：
+        # 如果 min_periods 为 None（异常情况），回退到类默认值。
+        # Use getattr with safe fallback; also defend against None values
+        # by falling back to the class default.
+        actual_minp = getattr(self, 'min_periods', self._DEFAULT_MIN_PERIODS)
+        if actual_minp is None:
+            actual_minp = self._DEFAULT_MIN_PERIODS
+        if actual_minp != self._DEFAULT_MIN_PERIODS:
+            return f"{type(self).__name__}({self.feature},{self.N},{actual_minp})"
         return f"{type(self).__name__}({self.feature},{self.N})"
 
-    def _load_internal(self, df: pd.DataFrame, context: dict = None) -> pd.Series:
+    def _load_internal(self, df: pd.DataFrame, context: Optional[Dict[str, Any]] = None) -> pd.Series:
         series = self.feature.load(df, context=context)
         if isinstance(series.index, pd.MultiIndex) and 'ticker' in series.index.names:
             # groupby ticker 并进行 rolling 计算，然后用 droplevel 和 reorder_levels 还原索引与排序
@@ -371,7 +424,7 @@ class Ref(Rolling):
     历史引用算子：Ref($close, 5) 代表 5 天前的收盘价。
     由于 shift 计算不是 pandas 内置的通用 rolling 统计指标，它独立处理。
     """
-    def _load_internal(self, df: pd.DataFrame, context: dict = None) -> pd.Series:
+    def _load_internal(self, df: pd.DataFrame, context: Optional[Dict[str, Any]] = None) -> pd.Series:
         series = self.feature.load(df, context=context)
         if isinstance(series.index, pd.MultiIndex) and 'ticker' in series.index.names:
             res = series.groupby(level='ticker').shift(self.N)
@@ -424,20 +477,27 @@ def parse_field(field: str) -> str:
     "$close" -> "Feature('close')"
     "$$roewa_q" -> "PFeature('roewa_q')"
     "Ref($close, 1) > 0" -> "Ref(Feature('close'), 1) > 0"
+    
+    注意：正则匹配要求变量名仅由字母、数字、下划线和中文标点组成，
+    以确保不会误匹配公式中的运算符（如 -、+ 等）。
+    Note: The regex only matches variable names consisting of letters, digits,
+    underscores and Chinese punctuation, to avoid false matches on operators.
     """
     if not isinstance(field, str):
         field = str(field)
     
-    chinese_punctuation_regex = r"\u3001\uff1a\uff08\uff09"
+    # 安全的变量名字符集：\w (字母/数字/下划线) + 常用中文标点
+    # Safe character set for variable names: \w (letters/digits/underscore) + common Chinese punctuation
+    safe_name_chars = r"[\w\u3001\uff1a\uff08\uff09]"
     # 替换 $$[name] -> PFeature('[name]')
-    field = re.sub(rf"\$\$([\w{chinese_punctuation_regex}]+)", r'PFeature("\1")', field)
-    # 替换 $[name] -> Feature('[name]')
-    field = re.sub(rf"\$([\w{chinese_punctuation_regex}]+)", r'Feature("\1")', field)
+    field = re.sub(rf"\$\$({safe_name_chars}+)", r'PFeature("\1")', field)
+    # 替换 $[name] -> Feature('[name]')（仅在未被 $$ 匹配后执行）
+    field = re.sub(rf"(?<!\$)\$({safe_name_chars}+)", r'Feature("\1")', field)
     
     return field
 
 
-def get_op_namespace() -> dict:
+def get_op_namespace() -> Dict[str, type]:
     """
     获取包含所有特征和算子类名在内的计算名字空间，专门供 eval() 使用。
     Get the evaluation namespace containing all operators and features, designed for eval().

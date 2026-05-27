@@ -8,8 +8,11 @@ from datetime import datetime, timedelta
 
 # Fix Windows console emoji printing error
 # 修复 Windows 控制台下 Emoji 打印可能出现的编码错误
-if sys.stdout.encoding.lower() != 'utf-8':
-    sys.stdout.reconfigure(encoding='utf-8')
+try:
+    if sys.stdout.encoding.lower() != 'utf-8':
+        sys.stdout.reconfigure(encoding='utf-8')
+except (AttributeError, OSError):
+    pass  # stdout may be redirected or not support reconfigure
 
 # Add project root to sys.path to enable clean absolute imports
 # 将项目根目录添加到 sys.path 以支持干净的绝对导入
@@ -18,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fetcher.fetch_price import fetch_prices_batch
 from fetcher.get_sp_500_list import get_sp500_tickers
 from data.load_data import init_prices_table, insert_prices, get_latest_price_date
-from utils.config import get_db
+from utils.config import get_price_db
 
 
 def fetch_and_supplement_prices(tickers: list[str], overlap_days: int = 5, force_full: bool = False) -> int:
@@ -60,8 +63,9 @@ def fetch_and_supplement_prices(tickers: list[str], overlap_days: int = 5, force
 
     print(f"\n📦 成功拉取到 {len(df)} 行行情数据")
 
-    # 3. Securely insert or replace into database
-    with get_db() as con:
+    # 3. Securely insert or replace into database (use write mode for price DB)
+    # 安全地插入或替换到数据库中（使用写模式打开行情数据库）
+    with get_price_db(read_only=False) as con:
         init_prices_table(con)
         written_rows = insert_prices(con, df)
         print(f"✅ 行情增量写入完成，受影响/更新的数据库行数: {written_rows} 行")
