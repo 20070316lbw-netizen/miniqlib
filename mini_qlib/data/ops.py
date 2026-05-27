@@ -367,9 +367,9 @@ class Rolling(ExpressionOps):
     """
     
     _func = None
-    _DEFAULT_MIN_PERIODS: int = 1  # 默认最小有效观测数 / default minimum observation count
+    _DEFAULT_MIN_PERIODS: Optional[int] = None  # 默认跟随窗口 N / default follows window N
 
-    def __init__(self, feature: MiniExpression, N: int, min_periods: int = _DEFAULT_MIN_PERIODS):
+    def __init__(self, feature: MiniExpression, N: int, min_periods: Optional[int] = _DEFAULT_MIN_PERIODS):
         """
         Parameters
         ----------
@@ -382,7 +382,10 @@ class Rolling(ExpressionOps):
         """
         # 拦截包装器会自动绑定 self.feature = feature, self.N = N, self.min_periods = min_periods
         # The interceptor will automatically bind self.feature, self.N, and self.min_periods
-        pass
+        if min_periods is None:
+            self.min_periods = int(N) if N > 0 else 1
+        else:
+            self.min_periods = int(min_periods)
 
     def __str__(self) -> str:
         """

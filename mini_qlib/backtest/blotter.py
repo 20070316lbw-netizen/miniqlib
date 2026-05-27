@@ -17,7 +17,15 @@ class Order:
     代表回测引擎中的交易订单。
     """
 
-    def __init__(self, order_id: str, ticker: str, direction: str, volume: float, timestamp: pd.Timestamp):
+    def __init__(
+        self,
+        order_id: str,
+        ticker: str,
+        direction: str,
+        volume: float,
+        timestamp: pd.Timestamp,
+        target_cash: Optional[float] = None,
+    ):
         """
         Initialize an Order / 初始化订单。
 
@@ -33,6 +41,8 @@ class Order:
         self.direction = direction.upper()
         self.volume = float(volume)
         self.timestamp = timestamp
+        # Optional target cash budget carried by strategy for execution-time rebalance checks
+        self.target_cash = float(target_cash) if target_cash is not None else None
         self.status = "PENDING"  # Initial state is always PENDING / 初始状态一律为挂单中 PENDING
 
     def __repr__(self):
@@ -102,6 +112,7 @@ class Blotter:
         self.open_orders: List[Order] = []        # Queue of active PENDING orders / 处于 PENDING 状态的待成交挂单列表
         self.order_history: List[Order] = []      # Audit trail of all orders submitted / 包含所有订单的审计历史表
         self.trade_history: List[dict] = []       # Detailed transaction logs / 详细的交易成交历史细化日志
+        self.realized_pnl: float = 0.0            # 累计已实现盈亏 / cumulative realized PnL
 
     def submit_order(self, order: Order):
         """
@@ -134,18 +145,23 @@ class Blotter:
         self.open_orders.remove(order)
         order.status = "FILLED"
 
+        ticker = order.ticker
+
         # Update cash accounting based on transaction direction
         # 根据交易方向，结算可用资金余额（买入扣除佣金，卖出扣除佣金）
         if order.direction == "BUY":
             total_outlay = (fill_volume * fill_price) + commission
             self.cash -= total_outlay
         elif order.direction == "SELL":
+            pos_before = self.positions.get(ticker)
+            if pos_before is not None:
+                matched_volume = min(fill_volume, pos_before.volume)
+                self.realized_pnl += matched_volume * (fill_price - pos_before.cost_price) - commission
             total_receipt = (fill_volume * fill_price) - commission
             self.cash += total_receipt
 
         # Update stock holdings in portfolio positions
         # 更新投资组合持仓
-        ticker = order.ticker
         if ticker not in self.positions:
             self.positions[ticker] = Position(ticker)
         

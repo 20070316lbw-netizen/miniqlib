@@ -99,6 +99,13 @@ class Exchange:
             else:
                 fill_price = open_price * (1.0 - slippage)
 
+            # Optional execution-time rebalance check:
+            # If strategy supplies a target cash budget (estimated on T close),
+            # cap next-open fill volume to prevent systematic over-allocation on gap-up opens.
+            if order.direction == "BUY" and getattr(order, "target_cash", None) is not None and fill_price > 0.0:
+                target_cash = max(0.0, float(order.target_cash))
+                fill_volume = min(fill_volume, target_cash / fill_price)
+
             # 5. Apply standard transactional expenses
             # 计算交易所摩擦损耗成本
             fill_amount = fill_volume * fill_price

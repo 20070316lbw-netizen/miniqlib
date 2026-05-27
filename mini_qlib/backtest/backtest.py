@@ -153,6 +153,7 @@ def run_backtest(
                     # 计算需买入补仓的缺口股数，大于 0 则提交买单
                     volume_to_buy = target_volume - current_volume
                     if volume_to_buy > 0.0:
+                        target_cash_gap = max(0.0, (target_volume - current_volume) * close_price)
                         order_id_counter += 1
                         buy_order = Order(
                             order_id=f"ORD_{order_id_counter:06d}",
@@ -160,6 +161,7 @@ def run_backtest(
                             direction="BUY",
                             volume=volume_to_buy,
                             timestamp=current_date,
+                            target_cash=target_cash_gap,
                         )
                         blotter.submit_order(buy_order)
 
