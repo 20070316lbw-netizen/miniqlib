@@ -105,3 +105,26 @@ print("🚀 三大引擎完美共存！")
    所有新编写的底层方法库和高阶脚本，其内的 docstrings、模块说明、关键行代码注释**必须采用英文与中文双语对照编写**（英文在上，精确中文在下），并由 `.gemini/agents/translator.md` 进行自动化规范。
 2. 💾 **跨平台 UTF-8 编码契约 (UTF-8 Encoding Defense)**
    由于 Windows 环境的系统默认编码不是 UTF-8，所有涉及到文件读取和写入的操作（如 `open()`、`pd.read_csv()`、`to_csv()`、`yaml.safe_load()`），必须显式指明 `encoding="utf-8"` 参数，严禁使用系统默认编码以防止 `UnicodeDecodeError`。
+
+---
+
+## 📈 项目开发路线图与已完成功能 (Development Roadmap & Completed Features)
+
+为了将 MiniQLib 打造为工业级、高性能、无未来函数的高保真多因子计算与回测系统，我们在**第一阶段（反射与参数锁）**和**第二阶段（时序隔离、参数扁平化与表达式缓存）**中实现了核心 AST 算子引擎的深度重构与规范确立：
+
+### 🏁 第一阶段：表达式地基与动态反射 (Phase 1: Foundation & Dynamic Reflection)
+- [x] **AST 地基抽离与运算符重载** ([expression.py](file:///c:/Users/liu/Desktop/miniqlib/mini_qlib/data/expression.py))：成功将底层基类 `MiniExpression` 与具体算子彻底剥离解耦，通过重载 Python 的算术与比较运算符（如 `+`, `-`, `>`, `<=`), 使得编写 `$close - $open` 即可在内存中自动链接形成高度灵活的抽象语法树。
+- [x] **动态参数反射自动绑定** ([ops.py](file:///c:/Users/liu/Desktop/miniqlib/mini_qlib/data/ops.py))：基于 `__init_subclass__` 类钩子与 `inspect.signature` 反射机制，自动捕获子类实例化时的传参并动态装填绑定至实例属性，彻底省去硬编码的 `__init__` 参数赋值与公式序列化逻辑。
+- [x] **继承链参数防覆盖锁** ([ops.py](file:///c:/Users/liu/Desktop/miniqlib/mini_qlib/data/ops.py))：首创 `_params_locked` 防覆盖参数锁机制，完美解决多级继承链（例如 `Rolling` -> `Mean`）中父类包装器被重复触发并恶意覆盖子类已捕获属性的架构痛点。
+- [x] **双语自动因子公式编译器**：编写 `parse_field` 正则解析引擎，实现由 `"$close - Ref($open, 1)"` 外部文本因子字符串到内部 AST 树实例的自动正则转换与 `eval` 动态编译评估。
+- [x] **反射与捕获单元测试** ([test_reflection.py](file:///c:/Users/liu/Desktop/miniqlib/sometest/test_reflection.py))：建立第一阶段完备的单元测试，支持参数锁、多级继承、AST 自动组装和公式解析的回归测试。
+
+### 🚀 第二阶段：工业级计算深度优化与规范统一 (Phase 2: Industrial Optimization & Conventions)
+- [x] **跨股票时序溢出绝对隔离** ([ops.py](file:///c:/Users/liu/Desktop/miniqlib/mini_qlib/data/ops.py))：在 `Rolling` 与 `Ref` 算子中统一重写 `_load_internal`。在多股票 Panel Data 场景下，自动识别 DataFrame 的 `pd.MultiIndex` 并执行 `groupby('ticker')` 时序隔离计算，彻底封堵因前一只股票的尾部历史数据溢出污染后一只股票、进而产生 Look-Ahead Bias（前瞻偏差未来函数）与回测失真的重大安全隐患。
+- [x] **多参数算子 (`*args`) 扁平化捕获** ([ops.py](file:///c:/Users/liu/Desktop/miniqlib/mini_qlib/data/ops.py))：完美适配 `inspect.Parameter.VAR_POSITIONAL`（即形如 `*features` 的多参数算子），将入参在拦截定义时自动执行 `self.args.extend` 扁平化，彻底修复因嵌套 tuple 结构导致 `str()` 序列化多出双重圆括号的问题（如将 `Concat(($close,$open))` 统一修复为完美的 `Concat($close,$open)`）。
+- [x] **零开销因子计算缓存系统** ([expression.py](file:///c:/Users/liu/Desktop/miniqlib/mini_qlib/data/expression.py))：引入带有 `context` 字典的递归因子缓存路由。计算链在执行 `load()` 时递归向下透传缓存，以 `str(self)` 唯一因子表达式串作为缓存键。重复算子子树仅在物理上计算一次，完美杜绝海量计算重复因子的冗余开销。
+- [x] **时序隔离与极速缓存深度测试** ([test_phase2_computations.py](file:///c:/Users/liu/Desktop/miniqlib/sometest/test_phase2_computations.py))：针对时序隔离计算正确性、变长参数扁平化序列化以及缓存命中率与计算次数进行了 100% 严苛的自动化测试检验，确保在多股票维度下没有任何未来数据泄漏。
+- [x] **双语高级开发规范指南** ([mini_qlib/data/README.md](file:///c:/Users/liu/Desktop/miniqlib/mini_qlib/data/README.md))：编写涵盖行情 `MultiIndex` 索引标准、大小写 Schema、PIT 财务数据机制、算子命名（特征用 `feature`，窗口用大写 `N`）以及无空格序列化格式的权威 SSOT 开发准则，确保团队所有后续代码与数据的高度一致。
+- [x] **滚动算子动态有效观测窗口控制** (`min_periods` 支持) ([ops.py](file:///c:/Users/liu/Desktop/miniqlib/mini_qlib/data/ops.py))：重写时间序列基类 `Rolling` 构造器与时序加载逻辑，全面支持可选的 `min_periods` 动态观测数配置。结合独特的公式唯一序列化格式 `__str__`，在完美向下兼容微软 Qlib 行情因子的前提下，实现对不同有效观测周期因子树的严格隔离缓存与防碰撞管理。
+- [x] **因子编译沙箱化安全防线** (`eval` 安全收窄) ([handler.py](file:///c:/Users/liu/Desktop/miniqlib/mini_qlib/data/handler.py))：深度加固 `DataHandler` 动态配置编译器，在 `eval()` 执行自定义公式转换时，显式传递限制的 Built-ins 名字空间 `{"__builtins__": {}}`，彻底锁死全局系统内置危险函数执行权限，构筑极致安全的因子量化沙箱环境。
+- [x] **动态控制与沙箱沙盒深度测试** ([test_phase2_computations.py](file:///c:/Users/liu/Desktop/miniqlib/sometest/test_phase2_computations.py))：设计并补充 `test_min_periods_dynamic` 回归与集成测试模块，严格验证在 `min_periods > 1`（例如严格窗口 `min_periods=3`）下的时序 `NaN` 数据阻断与阻隔表现，确保全链路计算的高保真高稳定性。

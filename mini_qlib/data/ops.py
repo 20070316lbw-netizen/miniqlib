@@ -74,8 +74,20 @@ class ExpressionOps(MiniExpression):
                     self.args = []
                     for name, value in bound.arguments.items():
                         if name != 'self':
+                            param = sig.parameters[name]
+                            if param.kind == inspect.Parameter.VAR_POSITIONAL:
+                                setattr(self, name, value)
+                                self.args.extend(value)  # 扁平化追加，而非 meta-tuple
+                            else:
+                                setattr(self, name, value)
+                                self.args.append(value)
+                else:
+                    # 非根节点（父类构造）调用时，依然需要绑定父类自身的特有属性（如 self.func），但绝不能修改 self.args
+                    bound = sig.bind(self, *args, **kwargs)
+                    bound.apply_defaults()
+                    for name, value in bound.arguments.items():
+                        if name != 'self':
                             setattr(self, name, value)
-                            self.args.append(value)
                 
                 # 执行子类原始的 __init__ 构造逻辑 (如做参数校验等)
                 original_init(self, *args, **kwargs)
@@ -124,8 +136,8 @@ class Abs(ElemOperator):
     """
     绝对值算子：Abs($close)
     """
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        series = self.feature.load(df)
+    def _load_internal(self, df: pd.DataFrame, context: dict = None) -> pd.Series:
+        series = self.feature.load(df, context=context)
         return series.abs()
 
 
@@ -133,8 +145,8 @@ class Log(ElemOperator):
     """
     对数算子：Log($close)
     """
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        series = self.feature.load(df)
+    def _load_internal(self, df: pd.DataFrame, context: dict = None) -> pd.Series:
+        series = self.feature.load(df, context=context)
         return np.log(series)
 
 
@@ -142,8 +154,8 @@ class Sign(ElemOperator):
     """
     符号算子：Sign($close)
     """
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        series = self.feature.load(df)
+    def _load_internal(self, df: pd.DataFrame, context: dict = None) -> pd.Series:
+        series = self.feature.load(df, context=context)
         return np.sign(series)
 
 
@@ -176,9 +188,9 @@ class NpPairOperator(PairOperator):
         # 拦截包装器会自动绑定 self.feature_left, self.feature_right, self.func
         pass
 
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        series_left = self.feature_left.load(df) if isinstance(self.feature_left, MiniExpression) else self.feature_left
-        series_right = self.feature_right.load(df) if isinstance(self.feature_right, MiniExpression) else self.feature_right
+    def _load_internal(self, df: pd.DataFrame, context: dict = None) -> pd.Series:
+        series_left = self.feature_left.load(df, context=context) if isinstance(self.feature_left, MiniExpression) else self.feature_left
+        series_right = self.feature_right.load(df, context=context) if isinstance(self.feature_right, MiniExpression) else self.feature_right
         
         # 提取底层的 Numpy 计算函数（如 add, subtract, multiply, divide, greater 等）
         calc_func = getattr(np, self.func)
@@ -252,6 +264,18 @@ class Ne(NpPairOperator):
         super().__init__(feature_left, feature_right, "not_equal")
 
 
+class Greater(NpPairOperator):
+    """元素级较大值算子：Greater($open, $close)"""
+    def __init__(self, feature_left, feature_right):
+        super().__init__(feature_left, feature_right, "maximum")
+
+
+class Less(NpPairOperator):
+    """元素级较小值算子：Less($open, $close)"""
+    def __init__(self, feature_left, feature_right):
+        super().__init__(feature_left, feature_right, "minimum")
+
+
 # ==============================================================================
 # 2.3 三目条件算子 (Triple-Wise Operators)
 # ==============================================================================
@@ -265,10 +289,10 @@ class If(ExpressionOps):
                  feature_right: Union[MiniExpression, float, int]):
         pass
 
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        cond_series = self.condition.load(df)
-        left_series = self.feature_left.load(df) if isinstance(self.feature_left, MiniExpression) else self.feature_left
-        right_series = self.feature_right.load(df) if isinstance(self.feature_right, MiniExpression) else self.feature_right
+    def _load_internal(self, df: pd.DataFrame, context: dict = None) -> pd.Series:
+        cond_series = self.condition.load(df, context=context)
+        left_series = self.feature_left.load(df, context=context) if isinstance(self.feature_left, MiniExpression) else self.feature_left
+        right_series = self.feature_right.load(df, context=context) if isinstance(self.feature_right, MiniExpression) else self.feature_right
         
         res = np.where(cond_series, left_series, right_series)
         return pd.Series(res, index=cond_series.index)
@@ -287,17 +311,53 @@ class Rolling(ExpressionOps):
     """
     滚动时间窗口算子的抽象基类。
     所有依赖历史时间窗口计算的算子（如 Ref, Mean, Sum 等）都属于这一族。
+    Abstract base class for rolling time window operators.
+    All operators relying on historical window computations (e.g., Ref, Mean, Sum) belong to this family.
     
     【高阶无硬编码设计】：
     - 各个子类（如 Mean）只需在类级别声明 `_func = "mean"`，不需要在 `__init__` 中硬编码传参！
     - 基类 `Rolling` 构造器通过 `self._func` 自动反射完成底层计算方法绑定。
+    [High-Level No-Hardcoding Design]:
+    - Each subclass (e.g., Mean) only needs to declare `_func = "mean"` at the class level, eliminating hardcoded constructor arguments!
+    - The base `Rolling` constructor automatically binds underlying calculation methods via dynamic reflection of `self._func`.
     """
     
     _func = None
 
-    def __init__(self, feature: MiniExpression, N: int):
-        # 拦截包装器会自动绑定 self.feature = feature, self.N = N
+    def __init__(self, feature: MiniExpression, N: int, min_periods: int = 1):
+        """
+        Parameters
+        ----------
+        feature : MiniExpression
+            输入的子表达式 (Input subexpression)
+        N : int
+            滚动窗口大小 (Rolling window size)
+        min_periods : int, default 1
+            滚动窗口计算所需的最小有效观测数 (Minimum number of observations in window required to have a value)
+        """
+        # 拦截包装器会自动绑定 self.feature = feature, self.N = N, self.min_periods = min_periods
+        # The interceptor will automatically bind self.feature, self.N, and self.min_periods
         pass
+
+    def __str__(self) -> str:
+        """
+        根据 min_periods 是否为默认值 1，动态生成最简公式字符串。
+        Dynamically generate the simplified formula string based on whether min_periods is the default 1.
+        """
+        if hasattr(self, 'min_periods') and self.min_periods != 1:
+            return f"{type(self).__name__}({self.feature},{self.N},{self.min_periods})"
+        return f"{type(self).__name__}({self.feature},{self.N})"
+
+    def _load_internal(self, df: pd.DataFrame, context: dict = None) -> pd.Series:
+        series = self.feature.load(df, context=context)
+        if isinstance(series.index, pd.MultiIndex) and 'ticker' in series.index.names:
+            # groupby ticker 并进行 rolling 计算，然后用 droplevel 和 reorder_levels 还原索引与排序
+            # groupby ticker and perform rolling calculation, then restore index names and ordering via droplevel and reorder_levels
+            res = getattr(series.groupby(level='ticker').rolling(self.N, min_periods=self.min_periods), self._func)()
+            res = res.droplevel(0)
+            return res.reorder_levels(series.index.names).sort_index()
+        else:
+            return getattr(series.rolling(self.N, min_periods=self.min_periods), self._func)()
 
     def get_extended_window_size(self) -> Tuple[int, int]:
         lft_etd, rght_etd = self.feature.get_extended_window_size()
@@ -311,8 +371,11 @@ class Ref(Rolling):
     历史引用算子：Ref($close, 5) 代表 5 天前的收盘价。
     由于 shift 计算不是 pandas 内置的通用 rolling 统计指标，它独立处理。
     """
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        series = self.feature.load(df)
+    def _load_internal(self, df: pd.DataFrame, context: dict = None) -> pd.Series:
+        series = self.feature.load(df, context=context)
+        if isinstance(series.index, pd.MultiIndex) and 'ticker' in series.index.names:
+            res = series.groupby(level='ticker').shift(self.N)
+            return res.reorder_levels(series.index.names).sort_index()
         return series.shift(self.N)
 
     def get_extended_window_size(self) -> Tuple[int, int]:
@@ -328,45 +391,25 @@ class Mean(Rolling):
     """滚动均值算子 (移动平均线 MA)"""
     _func = "mean"
 
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        series = self.feature.load(df)
-        return series.rolling(self.N, min_periods=1).mean()
-
 
 class Sum(Rolling):
     """滚动求和算子"""
     _func = "sum"
-
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        series = self.feature.load(df)
-        return series.rolling(self.N, min_periods=1).sum()
 
 
 class Std(Rolling):
     """滚动标准差算子"""
     _func = "std"
 
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        series = self.feature.load(df)
-        return series.rolling(self.N, min_periods=1).std()
-
 
 class Max(Rolling):
     """滚动最大值算子"""
     _func = "max"
 
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        series = self.feature.load(df)
-        return series.rolling(self.N, min_periods=1).max()
-
 
 class Min(Rolling):
     """滚动最小值算子"""
     _func = "min"
-
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
-        series = self.feature.load(df)
-        return series.rolling(self.N, min_periods=1).min()
 
 
 # ==============================================================================
@@ -392,3 +435,36 @@ def parse_field(field: str) -> str:
     field = re.sub(rf"\$([\w{chinese_punctuation_regex}]+)", r'Feature("\1")', field)
     
     return field
+
+
+def get_op_namespace() -> dict:
+    """
+    获取包含所有特征和算子类名在内的计算名字空间，专门供 eval() 使用。
+    Get the evaluation namespace containing all operators and features, designed for eval().
+    """
+    return {
+        "Feature": Feature,
+        "PFeature": PFeature,
+        "Abs": Abs,
+        "Log": Log,
+        "Sign": Sign,
+        "Add": Add,
+        "Sub": Sub,
+        "Mul": Mul,
+        "Div": Div,
+        "Gt": Gt,
+        "Ge": Ge,
+        "Lt": Lt,
+        "Le": Le,
+        "Eq": Eq,
+        "Ne": Ne,
+        "Greater": Greater,
+        "Less": Less,
+        "If": If,
+        "Ref": Ref,
+        "Mean": Mean,
+        "Sum": Sum,
+        "Std": Std,
+        "Max": Max,
+        "Min": Min,
+    }

@@ -63,7 +63,7 @@ def run_tests():
     
     # 2. 验证 args 自动打包
     assert hasattr(mean_op, "args"), "错误：算子实例上没有生成 self.args！"
-    assert list(mean_op.args) == [close_feature, 20], f"错误：self.args 打包参数错误，实际为 {mean_op.args}"
+    assert list(mean_op.args) == [close_feature, 20, 1], f"错误：self.args 打包参数错误，实际为 {mean_op.args}"
 
     # 3. 验证无硬编码序列化公式字符串
     assert str(mean_op) == "Mean($close,20)", f"错误：公式序列化错误，实际为: {str(mean_op)}"

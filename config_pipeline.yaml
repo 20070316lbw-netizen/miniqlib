@@ -1,0 +1,63 @@
+# ==============================================================================
+# ABSOLUTE FILE PATH: C:\Users\liu\Desktop\miniqlib\config_pipeline.yaml
+# DESCRIPTION: Configuration file for the MiniQLib plug-and-play factor pipeline.
+# 描述: MiniQLib 可插拔因子计算与训练流水线配置文件。
+# ==============================================================================
+
+# 1. 因子与标签动态组装配置 (DataHandler config)
+data_handler:
+  # 特征列表：可直接调用 feature_registry 的键名，也可书写符合 AST 语法的自定义字符串公式
+  features:
+    # ─── KBar 形态特征 ───
+    KMID: "KMID"                 # 实体幅比：($close-$open)/$open
+    KLEN: "KLEN"                 # 振幅比率：($high-$low)/$open
+    KUP: "KUP"                   # 上影线比：($high-Greater($open,$close))/$open
+    KLOW: "KLOW"                 # 下影线比：(Less($open,$close)-$low)/$open
+    KSFT: "KSFT"                 # 偏离中枢：(2*$close-$high-$low)/$open
+    
+    # ─── 时序滚动特征 ───
+    ROC5: "ROC5"                 # 5日价格动量：Ref($close,5)/$close
+    MA10: "MA10"                 # 10日均线偏离：Mean($close,10)/$close-1
+    STD5: "STD5"                 # 5日收盘价波动：Std($close,5)/$close
+    VMA10: "VMA10"               # 10日均量偏离：Mean($volume,10)/($volume+1e-12)-1
+    RSV5: "RSV5"                 # 5日 RSV 随机指标：当前价格相对5天最高最低位置
+    
+    # ─── 纯自定义表达式 (无需进入注册表即可自由扩展) ───
+    CUSTOM_BIAS: "Mean($close,20)/$close-1"  # 20日均价偏离率
+
+  # 预测标签：通常为未来 N 日收益率，含 1 期 gap
+  labels:
+    label: "label_5d"            # 未来5日收益率：Ref($close,-6)/Ref($close,-1)-1
+
+# 2. 数据集切分与时序隔离带安全配置 (Dataset Segments & Embargo)
+data_loader:
+  segments:
+    train:
+      start: "2018-01-01"
+      end: "2021-12-31"
+    valid:
+      start: "2022-01-01"
+      end: "2022-12-31"
+    test:
+      start: "2023-01-01"
+      end: "2024-06-30"
+  
+  # 隔离带安全开关：启用后将基于真实交易日自动顺延隔离带，消灭任何未来数据泄露 (Embargo)
+  embargo_safety: true
+  # 隔离带天数 (基于 trading_days 交易日顺延数)。
+  # 我们的 label 为未来 5 日收益且含 1 期 gap，因此隔离带长度必须至少为 6 个交易日
+  embargo_days: 6
+
+# 3. LightGBM 机器学习训练参数 (LightGBM Training Hyperparameters)
+model:
+  objective: "regression"
+  metric: "rmse"
+  learning_rate: 0.05
+  num_leaves: 31
+  feature_fraction: 0.9
+  bagging_fraction: 0.8
+  bagging_freq: 5
+  min_data_in_leaf: 20
+  verbose: -1
+  num_boost_round: 150
+  early_stopping_rounds: 25

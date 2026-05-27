@@ -48,7 +48,7 @@ class MiniExpression:
         self.args = args
         self.kwargs = kwargs
 
-    def load(self, df: pd.DataFrame) -> pd.Series:
+    def load(self, df: pd.DataFrame, context: dict = None) -> pd.Series:
         """
         因子计算与加载的统一入口。
         
@@ -56,16 +56,23 @@ class MiniExpression:
         ----------
         df : pd.DataFrame
             输入的原始数据集，要求包含双重索引（datetime, ticker）或单重索引（datetime）。
+        context : dict, optional
+            缓存上下文，用于避免重复计算子表达式。
             
         Returns
         -------
         pd.Series
             计算完成的单因子序列，其 Index 必须与输入的 df 保持完全一致。
         """
-        # TODO: 在后续阶段实现具体的数据加载和缓存路由
-        return self._load_internal(df)
+        if context is None:
+            return self._load_internal(df)
+            
+        key = str(self)
+        if key not in context:
+            context[key] = self._load_internal(df, context=context)
+        return context[key]
 
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
+    def _load_internal(self, df: pd.DataFrame, context: dict = None) -> pd.Series:
         """
         具体的因子计算逻辑，由各个子类算子（如 Ref, Mean, Add）各自实现。
         """
@@ -163,7 +170,7 @@ class Feature(MiniExpression):
     def __str__(self) -> str:
         return f"${self.name}"
 
-    def _load_internal(self, df: pd.DataFrame) -> pd.Series:
+    def _load_internal(self, df: pd.DataFrame, context: dict = None) -> pd.Series:
         # 直接提取基础列
         if self.name in df.columns:
             return df[self.name]
