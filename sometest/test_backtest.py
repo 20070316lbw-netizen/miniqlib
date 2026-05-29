@@ -201,8 +201,8 @@ class TestBacktestComponents(unittest.TestCase):
         Exchange.match_orders(blotter_a, t2, portal, max_volume_ratio=1.0, slippage=0.0, fee_rate=0.0)
         self.assertEqual(len(blotter_a.open_orders), 0)
         self.assertEqual(order_a.status, "FILLED")
-        self.assertEqual(blotter_a.positions["AAPL"].volume, 4.0)
-        self.assertAlmostEqual(blotter_a.cash, 500.0 - 4.0 * 103.0, places=5)
+        self.assertAlmostEqual(blotter_a.positions["AAPL"].volume, 4.854368932038835, places=5)
+        self.assertAlmostEqual(blotter_a.cash, 0.0, places=5)
 
         # Case B: Cash is too low to buy even 1 share (force cancel)
         # 情况 B：余额不够买 1 股（执行自动撤销订单）

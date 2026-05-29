@@ -1,0 +1,29 @@
+# ==============================================================================
+# MiniQLib DCA Strategy Configuration
+# 描述: 定投苹果策略与标普500对标回测配置文件
+# ==============================================================================
+
+# 1. 策略配置 (Strategy Settings)
+strategy:
+  class: "AppleDCAStrategy"
+  params:
+    ticker: "AAPL"              # 定投标的
+    dca_amount: 10.0            # 每次定投额度 (is_shares=true 时为股数; false 时为金额 USD)
+    is_shares: true             # 是否按股数定投 (true: 每次买 N 股; false: 每次买 N 元)
+    # ⚠️ is_shares 必须是无引号布尔值 (true/false)。若写成 "true"/"false"（加引号），
+    #    YAML 会解析为字符串，Python bool("false") = True，导致行为反转且不报错。
+    # ⚠️ 固定股数模式 (is_shares=true) 存在 target_cash 预算帽保护：如果 T+1 开盘价
+    #    高于 T 日收盘价，交易所会将成交量缩至预算以内，实际成交可能少于 dca_amount 股。
+
+# 2. 回测基础参数 (Backtest Settings)
+backtest:
+  initial_cash: 100000.0        # 初始现金 (USD)
+  max_volume_ratio: 0.1         # 交易所单日成交量占比上限
+  slippage: 0.0005              # 撮合滑点 (0.05%)
+  fee_rate: 0.0003              # 交易经手费/手续费 (0.03%)
+  tax_rate: 0.001               # 卖出印花税率 (0.1%)
+  benchmark_ticker: "SPY"       # 对标的标普 500 基准 (如 SPY ETF 或 ^GSPC 指数)
+  
+  # 回测时间区间 (从 2008 年至今，涵盖完整历史数据范围)
+  start_date: "2008-01-01"
+  end_date: "2026-05-30"

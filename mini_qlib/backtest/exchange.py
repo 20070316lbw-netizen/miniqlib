@@ -72,8 +72,11 @@ class Exchange:
             open_price = data_portal.get_current(ticker, "open", current_date)
             market_volume = data_portal.get_current(ticker, "volume", current_date)
 
-            # Skip matching if the stock is suspended or missing price data on this day
-            # 如果该股当天停牌或价格数据缺失，跳过本次撮合，订单状态继续保持 PENDING，留待后续有交易的 Bar 撮合
+            # Skip matching if the stock is suspended or missing price data on this day.
+            # Orders stay PENDING and will be matched on the next available trading day.
+            # 如果该股当天停牌或价格数据缺失，跳过本次撮合，订单状态继续保持 PENDING，留待后续有交易的 Bar 撮合。
+            # ⚠️ 注意：若连续多日数据缺失，PENDING 订单会堆积，数据恢复后将在同一天全部以同一开盘价撮合成交。
+            #    对于 AAPL 等蓝筹股几乎不会触发，但低流动性标的需留意此行为。
             if pd.isna(open_price) or pd.isna(market_volume) or market_volume <= 0.0:
                 continue
 
@@ -120,24 +123,29 @@ class Exchange:
             if order.direction == "BUY":
                 required_total_cash = fill_amount + commission
                 if blotter.cash < required_total_cash:
-                    # If cash is insufficient to buy even 1 single share, cancel the order completely
-                    # 如果余额完全不够买入 1 股，将订单标记为 CANCELLED 移出队列，保障逻辑健壮
+                    # If cash is insufficient to buy even the minimum allowable volume, cancel the order completely.
+                    # For integer/large orders, minimum is 1 share. For fractional orders, minimum is 1e-5.
+                    # 如果余额完全不够买入最小允许数量，将订单标记为 CANCELLED 移出队列，保障逻辑健壮。
+                    # 对于整股/大订单，最小单位为 1 股；对于小数/定投定额订单，最小单位为 1e-5 股。
                     estimated_volume = blotter.cash / (fill_price * (1.0 + fee_rate))
-                    if estimated_volume < 1.0:
-                        _log.warning("现金不足购买1股，订单强制撤销: ORD_ID=%s, Ticker=%s, AvailableCash=%.2f", order.order_id, ticker, blotter.cash)
+                    min_volume = 1.0 if order.volume >= 1.0 else 1e-5
+                    if estimated_volume < min_volume:
+                        _log.warning("现金不足购买最小数量，订单强制撤销: ORD_ID=%s, Ticker=%s, AvailableCash=%.2f, MinVolume=%.5f", 
+                                     order.order_id, ticker, blotter.cash, min_volume)
                         blotter.cancel_order(order.order_id, current_date)
                         continue
                     else:
-                        # Auto-scale down the BUY volume to match the maximum available cash limit
-                        # 降额撮合：将股数缩减至当前最大可用现金的极限，保护资金底线
+                        # Auto-scale down the BUY volume to match the maximum available cash limit.
+                        # Retain fractional shares to support small-amount / fractional-share DCA strategies.
+                        # 降额撮合：将股数缩减至当前最大可用现金的极限，保护资金底线。保留小数股，不再做 int() 截断。
                         old_vol = fill_volume
-                        fill_volume = float(int(estimated_volume))
-                        _log.warning("可用现金不足，买入股数自动缩容降额: ORD_ID=%s, Ticker=%s, %d股 -> %d股", order.order_id, ticker, old_vol, fill_volume)
+                        fill_volume = estimated_volume
+                        _log.warning("可用现金不足，买入股数自动缩容降额: ORD_ID=%s, Ticker=%s, %.4f股 -> %.4f股", order.order_id, ticker, old_vol, fill_volume)
                         fill_amount = fill_volume * fill_price
                         commission = fill_amount * fee_rate
 
             # 7. Complete physical ledger update in Blotter
             # 记录真正的成交结账并移出挂单队列，超额的股数相当于在物理上被即刻取消，实现最干净且健壮的极简逻辑
             blotter.execute_fill(order.order_id, fill_volume, fill_price, commission, current_date)
-            _log.info("订单撮合成功: ORD_ID=%s, Ticker=%s, 方向=%s, 股数=%d, 价格=%.2f, 费用=%.2f", 
+            _log.info("订单撮合成功: ORD_ID=%s, Ticker=%s, 方向=%s, 股数=%.4f, 价格=%.2f, 费用=%.2f", 
                       order.order_id, ticker, order.direction, fill_volume, fill_price, commission)

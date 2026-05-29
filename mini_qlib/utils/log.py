@@ -13,6 +13,15 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+# Ensure stdout and stderr handle UTF-8 encoding nicely on Windows to avoid garbled terminal logs
+try:
+    if sys.stdout and getattr(sys.stdout, "encoding", None) and sys.stdout.encoding.lower() != 'utf-8':
+        sys.stdout.reconfigure(encoding='utf-8')
+    if sys.stderr and getattr(sys.stderr, "encoding", None) and sys.stderr.encoding.lower() != 'utf-8':
+        sys.stderr.reconfigure(encoding='utf-8')
+except (AttributeError, OSError):
+    pass
+
 # 默认日志格式：时间 | 级别 | 模块名 | 消息
 # Default log format: timestamp | level | module name | message
 LOG_FORMAT: str = (

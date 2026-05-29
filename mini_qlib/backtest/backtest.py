@@ -21,13 +21,14 @@ _log = get_logger(__name__)
 
 def run_backtest(
     df: pd.DataFrame,
-    predictions: pd.Series,
+    predictions: Optional[pd.Series] = None,
     initial_cash: float = 1000000.0,
     K: int = 5,
     max_volume_ratio: float = 0.1,
     slippage: float = 0.0005,
     fee_rate: float = 0.0003,
     tax_rate: float = 0.001,
+    strategy: Optional[Any] = None,
 ) -> pd.DataFrame:
     """
     Run high-fidelity event-driven backtesting for a Top-K rotation strategy on test predictions.
@@ -57,11 +58,17 @@ def run_backtest(
     # 初始化核心分类账簿与只读高性能行情沙箱网关
     data_portal = DataPortal(df)
     blotter = Blotter(initial_cash)
-    order_id_counter = 0
 
-    # Extract sorted chronology of trading days strictly limited to test prediction set
-    # 提取测试集预测得分所涵盖的物理升序交易日序列
-    backtest_dates = predictions.index.get_level_values("date").unique().sort_values()
+    # Initialize strategy if not provided (defaulting to TopK equal weight rotation)
+    if strategy is None:
+        from .strategy import TopKRotationStrategy
+        strategy = TopKRotationStrategy(K=K)
+
+    # Extract sorted chronology of trading days. If predictions are not available, use all unique dates in the market dataset.
+    if predictions is not None:
+        backtest_dates = predictions.index.get_level_values("date").unique().sort_values()
+    else:
+        backtest_dates = df.index.get_level_values("date").unique().sort_values()
 
     # Trackers to store portfolio history for analytics
     # 历史记录列表，最终用于生成每日净值时序 DataFrame
@@ -101,69 +108,18 @@ def run_backtest(
         nav = blotter.get_nav(current_prices)
 
         # ----------------------------------------------------------------------
-        # Step C: Strategy Decision Making (Top-K equal-weight stock rotation)
-        # 步骤 C：执行策略决策（经典的 Top-K 预测得分等权重每日持仓轮动）
+        # Step C: Strategy Decision Making (Decoupled strategy class execution)
+        # 步骤 C：执行策略决策（解耦后的可插拔交易策略触发）
         # ----------------------------------------------------------------------
-        try:
-            # Slice today's prediction scores
-            # 截取今日的因子预测结果
-            daily_preds = predictions.loc[current_date].dropna()
-        except KeyError:
-            # Skip decision-making if no predictions available for today
-            # 如果该交易日没有任何预测数据，跳过交易策略决策
-            daily_preds = pd.Series(dtype="float64")
-
-        if not daily_preds.empty:
-            # Sort scores descending and pick the Top-K tickers
-            # 按照因子预测值降序排序，筛选出最优的前 K 只股票代码
-            sorted_tickers = daily_preds.sort_values(ascending=False)
-            top_k_tickers = list(sorted_tickers.head(K).index)
-
-            # Target capital allocation per stock (Equal weight)
-            # 每只股票的等权重目标分配额度
-            target_value_per_stock = nav / K
-
-            # Action 1: Liquidation (SELL orders for tickers dropping out of Top-K)
-            # 动作 1：强制清仓（对于掉出前 K 名选股名单的当前持仓股票，下达足额卖单）
-            for held_ticker in list(blotter.positions.keys()):
-                if held_ticker not in top_k_tickers:
-                    shares_to_sell = blotter.positions[held_ticker].volume
-                    if shares_to_sell > 0.0:
-                        order_id_counter += 1
-                        sell_order = Order(
-                            order_id=f"ORD_{order_id_counter:06d}",
-                            ticker=held_ticker,
-                            direction="SELL",
-                            volume=shares_to_sell,
-                            timestamp=current_date,
-                        )
-                        blotter.submit_order(sell_order)
-
-            # Action 2: Rebalancing / Allocation (BUY orders for Top-K tickers)
-            # 动作 2：调仓与建仓（对于 Top-K 名单内的优质股票，核算缺口并买入补仓）
-            for target_ticker in top_k_tickers:
-                close_price = data_portal.get_current(target_ticker, "close", current_date)
-                if not pd.isna(close_price) and close_price > 0.0:
-                    # Calculate target shares count based on target allocation value
-                    # 根据今日收盘价测算目标持仓股数
-                    target_volume = target_value_per_stock / close_price
-                    current_volume = blotter.positions[target_ticker].volume if target_ticker in blotter.positions else 0.0
-
-                    # Generate BUY order if there is an under-allocated share gap
-                    # 计算需买入补仓的缺口股数，大于 0 则提交买单
-                    volume_to_buy = target_volume - current_volume
-                    if volume_to_buy > 0.0:
-                        target_cash_gap = max(0.0, (target_volume - current_volume) * close_price)
-                        order_id_counter += 1
-                        buy_order = Order(
-                            order_id=f"ORD_{order_id_counter:06d}",
-                            ticker=target_ticker,
-                            direction="BUY",
-                            volume=volume_to_buy,
-                            timestamp=current_date,
-                            target_cash=target_cash_gap,
-                        )
-                        blotter.submit_order(buy_order)
+        orders = strategy.on_bar(
+            current_date=current_date,
+            data_portal=data_portal,
+            blotter=blotter,
+            nav=nav,
+            predictions=predictions,
+        )
+        for order in orders:
+            blotter.submit_order(order)
 
         # ----------------------------------------------------------------------
         # Step D: Record Daily Portfolio NAV Metrics
